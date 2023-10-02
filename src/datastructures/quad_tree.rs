@@ -1,17 +1,33 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
-#[derive(Debug, Default, PartialEq)]
-pub(crate) struct QuadTree<T> where T: InitializeNode {
-    parent: Option<usize>,
-    children: Option<[Arc<QuadTree<T>>; 4]>,
-    node: T,
+#[derive(Debug, Default)]
+pub(crate) struct QuadTree<T> where T: Node {
+    pub(crate) parent: Option<usize>,
+    pub(crate) children: Option<[Arc<RwLock<QuadTree<T>>>; 4]>,
+    pub(crate) node: T,
 }
 
-pub(crate) trait InitializeNode {
-    fn new() -> Self;
+pub(crate) enum Quadrant {
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
 }
 
-impl<T: InitializeNode> QuadTree<T> {
+pub(crate) trait Node {
+    fn split_node(&self, quadrant: Quadrant) -> Self where Self: Sized;
+}
+
+pub(crate) trait Update<T> {
+    fn update(&mut self, data: T);
+}
+
+pub(crate) trait NewRoot<T> {
+    fn new_root(node: T) -> Self;
+}
+
+impl<T: Node> QuadTree<T> {
+
     pub(crate) fn new(parent: *const QuadTree<T>, node: T) -> Self {
         QuadTree {
             parent: Some(parent as usize),
@@ -23,10 +39,10 @@ impl<T: InitializeNode> QuadTree<T> {
     pub(crate) fn split(&mut self) {
         if self.children.is_none() {
             self.children = Some([
-                Arc::new(QuadTree::new(self as *const QuadTree<T>, T::new())),
-                Arc::new(QuadTree::new(self as *const QuadTree<T>, T::new())),
-                Arc::new(QuadTree::new(self as *const QuadTree<T>, T::new())),
-                Arc::new(QuadTree::new(self as *const QuadTree<T>, T::new()))
+                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::TopLeft)))),
+                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::TopRight)))),
+                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::BottomLeft)))),
+                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::BottomRight))))
             ]);
         }
     }
@@ -55,16 +71,24 @@ impl<T: InitializeNode> QuadTree<T> {
 mod tests {
     use super::*;
 
+    impl PartialEq for QuadTree<TestNode> {
+        fn eq(&self, other: &Self) -> bool {
+            return self.node == other.node
+                && self.has_children() == other.has_children()
+                && self.parent() == other.parent();
+        }
+    }
+
     #[test]
     fn should_split_quadtree() {
         let mut quad_tree: QuadTree<TestNode> = QuadTree::default();
         quad_tree.split();
 
         assert!(quad_tree.has_children());
-        assert_eq!(quad_tree.children.clone().unwrap()[0].parent().unwrap(), &quad_tree);
-        assert_eq!(quad_tree.children.clone().unwrap()[1].parent().unwrap(), &quad_tree);
-        assert_eq!(quad_tree.children.clone().unwrap()[2].parent().unwrap(), &quad_tree);
-        assert_eq!(quad_tree.children.clone().unwrap()[3].parent().unwrap(), &quad_tree);
+        assert_eq!(quad_tree.children.clone().unwrap()[0].read().unwrap().parent().unwrap(), &quad_tree);
+        assert_eq!(quad_tree.children.clone().unwrap()[1].read().unwrap().parent().unwrap(), &quad_tree);
+        assert_eq!(quad_tree.children.clone().unwrap()[2].read().unwrap().parent().unwrap(), &quad_tree);
+        assert_eq!(quad_tree.children.clone().unwrap()[3].read().unwrap().parent().unwrap(), &quad_tree);
     }
 
     #[test]
@@ -79,8 +103,8 @@ mod tests {
     #[derive(Default, PartialEq, Debug)]
     struct TestNode;
 
-    impl InitializeNode for TestNode {
-        fn new() -> Self {
+    impl Node for TestNode {
+        fn split_node(&self, quadrant: Quadrant) -> Self {
             TestNode
         }
     }
