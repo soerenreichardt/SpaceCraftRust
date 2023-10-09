@@ -5,6 +5,8 @@ pub(crate) struct QuadTree<T> where T: Node {
     pub(crate) parent: Option<usize>,
     pub(crate) children: Option<[Arc<RwLock<QuadTree<T>>>; 4]>,
     pub(crate) node: T,
+    pub(crate) max_depth: u8,
+    pub(crate) level: u8
 }
 
 pub(crate) enum Quadrant {
@@ -15,7 +17,7 @@ pub(crate) enum Quadrant {
 }
 
 pub(crate) trait Node {
-    fn split_node(&self, quadrant: Quadrant) -> Self where Self: Sized;
+    fn split_node(&self, quadrant: Quadrant, level: u8) -> Self where Self: Sized;
 }
 
 pub(crate) trait Update<T> {
@@ -28,23 +30,27 @@ pub(crate) trait NewRoot<T> {
 
 impl<T: Node> QuadTree<T> {
 
-    pub(crate) fn new(parent: *const QuadTree<T>, node: T) -> Self {
+    pub(crate) fn new(parent: *const QuadTree<T>, node: T, max_depth: u8, level: u8) -> Self {
         QuadTree {
             parent: Some(parent as usize),
             children: None,
             node,
+            max_depth,
+            level
         }
     }
 
-    pub(crate) fn split(&mut self) {
-        if self.children.is_none() {
+    pub(crate) fn split(&mut self) -> bool {
+        if self.children.is_none() && self.level < self.max_depth {
             self.children = Some([
-                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::TopLeft)))),
-                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::TopRight)))),
-                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::BottomLeft)))),
-                Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(Quadrant::BottomRight))))
+                self.new_child(Quadrant::TopLeft),
+                self.new_child(Quadrant::TopRight),
+                self.new_child(Quadrant::BottomLeft),
+                self.new_child(Quadrant::BottomRight)
             ]);
+            return true;
         }
+        return false;
     }
 
     pub(crate) fn merge(&mut self) {
@@ -64,6 +70,10 @@ impl<T: Node> QuadTree<T> {
 
     pub(crate) fn has_children(&self) -> bool {
         self.children.is_some()
+    }
+
+    fn new_child(&self, quadrant: Quadrant) -> Arc<RwLock<QuadTree<T>>> {
+        Arc::new(RwLock::new(QuadTree::new(self as *const QuadTree<T>, self.node.split_node(quadrant, self.level + 1), self.max_depth, self.level + 1)))
     }
 }
 
@@ -104,7 +114,7 @@ mod tests {
     struct TestNode;
 
     impl Node for TestNode {
-        fn split_node(&self, quadrant: Quadrant) -> Self {
+        fn split_node(&self, quadrant: Quadrant, level: u8) -> Self {
             TestNode
         }
     }

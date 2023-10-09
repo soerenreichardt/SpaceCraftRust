@@ -1,10 +1,10 @@
 use std::sync::Mutex;
+
 use bevy::asset::Assets;
 use bevy::hierarchy::BuildChildren;
-
 use bevy::math::Vec3;
 use bevy::pbr::{PbrBundle, StandardMaterial};
-use bevy::prelude::{Color, Commands, Component, default, Entity, Mesh, ResMut, shape, Transform, World};
+use bevy::prelude::{Color, Commands, Component, default, Entity, Mesh, ResMut, Transform, Visibility};
 use bevy::prelude::shape::Icosphere;
 
 use crate::datastructures::quad_tree::{NewRoot, Node, Quadrant, QuadTree, Update};
@@ -17,6 +17,7 @@ pub(crate) struct TerrainQuadTreeConfig {
 
 pub(crate) struct TerrainQuadTreeNode {
     pub(crate) center: Vec3,
+    face: Face,
     entity: Option<Entity>,
 }
 
@@ -53,6 +54,8 @@ impl NewRoot<(Face, &mut Commands<'_, '_>, &mut ResMut<'_, Assets<Mesh>>, &mut R
             parent: None,
             children: None,
             node: TerrainQuadTreeNode::new(&face, commands, meshes, materials),
+            max_depth: 3,
+            level: 0
         }
     }
 }
@@ -61,8 +64,12 @@ impl Update<(Vec3, f32, &mut Commands<'_, '_>, &mut ResMut<'_, Assets<Mesh>>, &m
     fn update(&mut self, (camera_position, threshold, commands, meshes, materials): (Vec3, f32, &mut Commands<'_, '_>, &mut ResMut<Assets<Mesh>>, &mut ResMut<Assets<StandardMaterial>>)) {
         let distance = (self.node.center - camera_position).length();
         if distance < threshold {
-            self.split();
-            self.on_split(commands, meshes, materials);
+            if self.split() {
+                for child in self.children.clone().unwrap() {
+                    child.write().unwrap().create_mesh_entity(commands, meshes, materials)
+                }
+                commands.entity(self.node.entity.unwrap());
+            }
         } else if distance > threshold {
             self.merge();
         }
@@ -76,14 +83,15 @@ impl Update<(Vec3, f32, &mut Commands<'_, '_>, &mut ResMut<'_, Assets<Mesh>>, &m
 }
 
 impl QuadTree<TerrainQuadTreeNode> {
-    fn on_split(&mut self, commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) {
+    fn create_mesh_entity(&mut self, commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) {
         let mut entity_commands = commands.spawn(PbrBundle {
-            mesh: meshes.add(Mesh::try_from(Icosphere { radius: 1.0, subdivisions: 2 }).unwrap()),
+            mesh: meshes.add(Mesh::try_from(Icosphere { radius: 0.1, subdivisions: 2 }).unwrap()),
             material: materials.add(StandardMaterial {
                 base_color: Color::hex("#ffd891").unwrap(),
                 ..default()
             }),
             transform: Transform::from_translation(self.node.center),
+            visibility: Visibility::Visible,
             ..default()
         });
 
@@ -97,38 +105,56 @@ impl QuadTree<TerrainQuadTreeNode> {
 
 impl TerrainQuadTreeNode {
     fn new(face: &Face, commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) -> Self {
-        match face {
-            Face::Top => TerrainQuadTreeNode { center: Vec3::new(0.0, 1.0, 0.0), entity: Some(TerrainQuadTreeNode::create_mesh(Vec3::new(0.0, 1.0, 0.0), commands, meshes, materials)) },
-            Face::Bottom => TerrainQuadTreeNode { center: Vec3::new(0.0, -1.0, 0.0), entity: Some(TerrainQuadTreeNode::create_mesh(Vec3::new(0.0, -1.0, 0.0), commands, meshes, materials)) },
-            Face::Left => TerrainQuadTreeNode { center: Vec3::new(-1.0, 0.0, 0.0), entity: Some(TerrainQuadTreeNode::create_mesh(Vec3::new(-1.0, 0.0, 0.0), commands, meshes, materials)) },
-            Face::Right => TerrainQuadTreeNode { center: Vec3::new(1.0, 0.0, 0.0), entity: Some(TerrainQuadTreeNode::create_mesh(Vec3::new(1.0, 0.0, 0.0), commands, meshes, materials)) },
-            Face::Front => TerrainQuadTreeNode { center: Vec3::new(0.0, 0.0, 1.0), entity: Some(TerrainQuadTreeNode::create_mesh(Vec3::new(0.0, 0.0, 1.0), commands, meshes, materials)) },
-            Face::Back => TerrainQuadTreeNode { center: Vec3::new(0.0, 0.0, -1.0), entity: Some(TerrainQuadTreeNode::create_mesh(Vec3::new(0.0, 0.0, -1.0), commands, meshes, materials)) }
+        let center = match face {
+            Face::Top => Vec3::new(0.0, 1.0, 0.0),
+            Face::Bottom => Vec3::new(0.0, -1.0, 0.0),
+            Face::Left => Vec3::new(-1.0, 0.0, 0.0),
+            Face::Right => Vec3::new(1.0, 0.0, 0.0),
+            Face::Front => Vec3::new(0.0, 0.0, 1.0),
+            Face::Back => Vec3::new(0.0, 0.0, -1.0)
+        };
+
+        TerrainQuadTreeNode {
+            center,
+            face: face.clone(),
+            entity: Some(TerrainQuadTreeNode::create_mesh(center, commands, meshes, materials)),
         }
     }
 
     fn create_mesh(center: Vec3, commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) -> Entity {
         commands.spawn(PbrBundle {
-            mesh: meshes.add(Icosphere { radius: 1.0, subdivisions: 2 }.try_into().unwrap()),
+            mesh: meshes.add(Icosphere { radius: 0.1, subdivisions: 2 }.try_into().unwrap()),
             material: materials.add(StandardMaterial {
                 base_color: Color::hex("#ffd891").unwrap(),
                 ..default()
             }),
             transform: Transform::from_translation(center),
+            visibility: Visibility::Visible,
             ..default()
         }).id()
+    }
+
+    fn compute_center_for_face(old_center: Vec3, face: &Face, (offset1, offset2): (f64, f64)) -> Vec3 {
+        match face {
+            Face::Top | Face::Bottom => Vec3::new(old_center.x + offset1 as f32, 0.0, old_center.z + offset2 as f32),
+            Face::Left | Face::Right => Vec3::new(0.0, old_center.y + offset1 as f32, old_center.z + offset2 as f32),
+            Face::Front | Face::Back => Vec3::new(old_center.x + offset1 as f32, old_center.y + offset2 as f32, 0.0)
+        }
     }
 }
 
 impl Node for TerrainQuadTreeNode {
-    fn split_node(&self, quadrant: Quadrant) -> TerrainQuadTreeNode {
+    fn split_node(&self, quadrant: Quadrant, level: u8) -> TerrainQuadTreeNode {
+        let offsets: (f64, f64) = match quadrant {
+            Quadrant::TopLeft => (-0.5, 0.5),
+            Quadrant::TopRight => (0.5, 0.5),
+            Quadrant::BottomLeft => (-0.5, -0.5),
+            Quadrant::BottomRight => (0.5, -0.5)
+        };
+        let offsets = (offsets.0 / (2.0f64.powf(level as f64)), offsets.1 / 2.0f64.powf(level as f64));
         TerrainQuadTreeNode {
-            center: match quadrant {
-                Quadrant::TopLeft => Vec3::new(self.center.x - 0.5, self.center.y + 0.5, self.center.z),
-                Quadrant::TopRight => Vec3::new(self.center.x + 0.5, self.center.y + 0.5, self.center.z),
-                Quadrant::BottomLeft => Vec3::new(self.center.x - 0.5, self.center.y - 0.5, self.center.z),
-                Quadrant::BottomRight => Vec3::new(self.center.x + 0.5, self.center.y - 0.5, self.center.z),
-            },
+            center: TerrainQuadTreeNode::compute_center_for_face(self.center, &self.face, offsets),
+            face: self.face.clone(),
             entity: None,
         }
     }
