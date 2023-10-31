@@ -1,56 +1,49 @@
 use bevy::asset::Assets;
+use bevy::hierarchy::BuildChildren;
 use bevy::pbr::StandardMaterial;
-use bevy::prelude::{Commands, Component, Mesh, Query, ResMut, Transform, With};
+use bevy::prelude::{Commands, Component, default, Mesh, ResMut, SpatialBundle, Transform, Visibility};
 
-use crate::MainCamera;
-use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeConfig};
+use crate::terrain::terrain_quad_tree::{RenderedTerrainBundle, TerrainQuadTree, TerrainQuadTreeChild};
 
 #[derive(Component)]
 pub(crate) struct Planet {
-    terrain_faces: [TerrainQuadTree; 6],
+    terrain_faces: [TerrainQuadTreeChild; 6],
+    radius: u8
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Face {
     Top,
     Bottom,
     Left,
     Right,
     Front,
-    Back
+    Back,
 }
 
 impl Planet {
-    pub(crate) fn spawn(config: TerrainQuadTreeConfig, commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) {
-        let planet = Planet::new(config, commands, meshes, materials);
-        commands.spawn(planet);
+    pub(crate) fn spawn(commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) {
+        let planet = Planet::new(2);
+        let terrain_components = planet.terrain_faces.iter().map(|terrain_face| {
+            let render_component = TerrainQuadTree::compute_mesh(terrain_face.0.read().unwrap().node.center.clone(), meshes, materials);
+            let rendered_terrain = RenderedTerrainBundle { terrain_component: terrain_face.into(), render_component };
+            commands.spawn::<RenderedTerrainBundle>(rendered_terrain).id()
+        }).collect::<Vec<_>>();
+
+        let mut planet = commands.spawn((planet, SpatialBundle { transform: Transform::default(), visibility: Visibility::Visible, ..default() }));
+        planet.push_children(&terrain_components);
     }
 
-    pub(crate) fn new(config: TerrainQuadTreeConfig, commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) -> Self {
-        Planet {
-            terrain_faces: [
-                TerrainQuadTree::new(Face::Top, config, commands, meshes, materials),
-                TerrainQuadTree::new(Face::Bottom, config, commands, meshes, materials),
-                TerrainQuadTree::new(Face::Left, config, commands, meshes, materials),
-                TerrainQuadTree::new(Face::Right, config, commands, meshes, materials),
-                TerrainQuadTree::new(Face::Front, config, commands, meshes, materials),
-                TerrainQuadTree::new(Face::Back, config, commands, meshes, materials)
-            ]
-        }
-    }
-}
+    fn new(radius: u8) -> Self {
+        let terrain_faces: [TerrainQuadTreeChild; 6] = [
+            TerrainQuadTree::root(Face::Top, radius).into(),
+            TerrainQuadTree::root(Face::Bottom, radius).into(),
+            TerrainQuadTree::root(Face::Left, radius).into(),
+            TerrainQuadTree::root(Face::Right, radius).into(),
+            TerrainQuadTree::root(Face::Front, radius).into(),
+            TerrainQuadTree::root(Face::Back, radius).into()
+        ];
 
-pub(crate) fn update(
-    mut commands: Commands,
-    mut query: Query<&mut Planet>,
-    camera_query: Query<(&Transform, With<MainCamera>)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>
-) {
-    let camera_transform = camera_query.get_single().expect("No camera found").0;
-    for mut planet in query.iter_mut() {
-        for terrain_face in planet.terrain_faces.iter_mut() {
-            terrain_face.update(&mut commands, &mut meshes, &mut materials, camera_transform.translation);
-        }
+        Planet { terrain_faces, radius }
     }
 }

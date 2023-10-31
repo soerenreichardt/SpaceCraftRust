@@ -2,14 +2,12 @@ use bevy::app::{App, Plugin, Startup, Update};
 use bevy::asset::Assets;
 use bevy::math::Vec3;
 use bevy::pbr::StandardMaterial;
-use bevy::prelude::{Camera3dBundle, Commands, Component, Mesh, PerspectiveProjection, ResMut, Transform};
+use bevy::prelude::{Camera3dBundle, Commands, Component, IntoSystemConfigs, Mesh, PerspectiveProjection, ResMut, Transform};
 use bevy::utils::default;
 
 use crate::camera::MainCamera;
 use crate::terrain::planet::Planet;
-use crate::terrain::terrain_quad_tree::TerrainQuadTreeConfig;
 
-pub(crate) mod datastructures;
 pub(crate) mod terrain;
 pub(crate) mod camera;
 
@@ -19,7 +17,7 @@ impl Plugin for SpaceCraftPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_systems(Startup, SpaceCraftPlugin::setup)
-            .add_systems(Update, (terrain::planet::update, camera::update_camera_position));
+            .add_systems(Update, (terrain::terrain_quad_tree::update, camera::update_camera_position));
     }
 }
 
@@ -33,6 +31,6 @@ impl SpaceCraftPlugin {
             },
             MainCamera
         ));
-        Planet::spawn(TerrainQuadTreeConfig { lod_threshold: 1.0 }, &mut commands, &mut meshes, &mut materials);
+        Planet::spawn(&mut commands, &mut meshes, &mut materials);
     }
 }
