@@ -5,7 +5,7 @@ use bevy::ecs::system::EntityCommands;
 use bevy::hierarchy::{BuildChildren, DespawnRecursiveExt};
 use bevy::math::Vec3;
 use bevy::pbr::{PbrBundle, StandardMaterial};
-use bevy::prelude::{Bundle, Color, Commands, Component, default, Entity, Mesh, Query, ResMut, Transform, Visibility, With};
+use bevy::prelude::{Bundle, Color, Commands, Component, ComputedVisibility, default, Entity, Mesh, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
 use bevy::prelude::shape::Icosphere;
 
 use crate::camera::MainCamera;
@@ -51,7 +51,7 @@ impl TerrainQuadTree {
             children: None,
             node: TerrainQuadTreeNode {
                 center,
-                face,
+                face
             },
             max_depth,
             level: 0,
@@ -117,7 +117,7 @@ impl TerrainQuadTree {
                 ..default()
             }),
             transform: Transform::from_translation(center),
-            visibility: Visibility::Inherited,
+            visibility: Visibility::Visible,
             ..default()
         }
     }
@@ -152,7 +152,7 @@ impl TerrainQuadTreeNode {
         let offsets = (offsets.0 / (2.0f64.powf(level as f64)), offsets.1 / 2.0f64.powf(level as f64));
         TerrainQuadTreeNode {
             center: Self::compute_center_for_face(&self.face, offsets),
-            face: self.face.clone(),
+            face: self.face.clone()
         }
     }
 
@@ -183,10 +183,12 @@ pub(crate) fn update(
                 let distance_to_camera = (camera_transform.translation - center).length();
                 let threshold = 2.0f32.powf(-(level as f32));
                 let mut quad_tree = quad_tree_lock.write().unwrap();
+                let mut entity_commands = commands.entity(entity);
                 if distance_to_camera < threshold {
-                    let entity_commands = commands.entity(entity);
+                    entity_commands.insert(VisibilityBundle { visibility: Visibility::Hidden, computed: ComputedVisibility::default() });
                     quad_tree.split(entity_commands, &mut meshes, &mut materials);
                 } else {
+                    entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, computed: ComputedVisibility::default() });
                     quad_tree.merge()
                 }
             }
