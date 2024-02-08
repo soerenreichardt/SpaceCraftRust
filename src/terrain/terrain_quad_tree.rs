@@ -1,14 +1,12 @@
 use std::sync::{Arc, RwLock, Weak};
 
-use bevy::asset::Assets;
 use bevy::ecs::system::EntityCommands;
 use bevy::hierarchy::{BuildChildren, DespawnRecursiveExt};
 use bevy::math::Vec3;
-use bevy::pbr::{PbrBundle, StandardMaterial};
-use bevy::prelude::{Bundle, Color, Commands, Component, ComputedVisibility, default, Entity, Mesh, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
-use bevy::prelude::shape::Icosphere;
+use bevy::prelude::{Commands, Component, ComputedVisibility, Entity, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
 
 use crate::camera::MainCamera;
+use crate::terrain::mesh_generator::{MeshGenerator, Request};
 use crate::terrain::planet::Face;
 
 pub(crate) enum Quadrant {
@@ -21,17 +19,19 @@ pub(crate) enum Quadrant {
 pub(crate) struct TerrainQuadTree {
     pub(crate) parent: Option<usize>,
     pub(crate) children: Option<[TerrainQuadTreeChild; 4]>,
-    pub(crate) node: TerrainQuadTreeNode,
+    pub(crate) node: Arc<RwLock<TerrainQuadTreeNode>>,
     pub(crate) max_depth: u8,
     pub(crate) level: u8,
 }
 
-pub(crate) struct TerrainQuadTreeChild(pub(crate) Arc<RwLock<TerrainQuadTree>>);
-
+#[derive(Debug)]
 pub(crate) struct TerrainQuadTreeNode {
     pub(crate) center: Vec3,
     face: Face,
+    pub(crate) entity: Option<Entity>,
 }
+
+pub(crate) struct TerrainQuadTreeChild(pub(crate) Arc<RwLock<TerrainQuadTree>>);
 
 #[derive(Component)]
 pub(crate) struct TerrainQuadTreeComponent(Weak<RwLock<TerrainQuadTree>>);
@@ -49,16 +49,17 @@ impl TerrainQuadTree {
         TerrainQuadTree {
             parent: None,
             children: None,
-            node: TerrainQuadTreeNode {
+            node: Arc::new(RwLock::new(TerrainQuadTreeNode {
                 center,
-                face
-            },
+                face,
+                entity: None
+            })),
             max_depth,
             level: 0,
         }
     }
 
-    pub(crate) fn new(parent: *const TerrainQuadTree, node: TerrainQuadTreeNode, max_depth: u8, level: u8) -> Self {
+    pub(crate) fn new(parent: *const TerrainQuadTree, node: Arc<RwLock<TerrainQuadTreeNode>>, max_depth: u8, level: u8) -> Self {
         TerrainQuadTree {
             parent: Some(parent as usize),
             children: None,
@@ -68,13 +69,13 @@ impl TerrainQuadTree {
         }
     }
 
-    pub(crate) fn split(&mut self, mut entity_commands: EntityCommands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) {
+    pub(crate) fn split(&mut self, mut entity_commands: EntityCommands, mesh_generator: &mut ResMut<MeshGenerator>) {
         if self.children.is_none() && self.level < self.max_depth {
             self.children = Some([
-                self.new_child(Quadrant::TopLeft, &mut entity_commands, meshes, materials),
-                self.new_child(Quadrant::TopRight, &mut entity_commands, meshes, materials),
-                self.new_child(Quadrant::BottomLeft, &mut entity_commands, meshes, materials),
-                self.new_child(Quadrant::BottomRight, &mut entity_commands, meshes, materials),
+                self.new_child(Quadrant::TopLeft, &mut entity_commands, mesh_generator),
+                self.new_child(Quadrant::TopRight, &mut entity_commands, mesh_generator),
+                self.new_child(Quadrant::BottomLeft, &mut entity_commands, mesh_generator),
+                self.new_child(Quadrant::BottomRight, &mut entity_commands, mesh_generator),
             ]);
         }
     }
@@ -92,52 +93,33 @@ impl TerrainQuadTree {
         }
     }
 
-    fn new_child(&self, quadrant: Quadrant, entity_commands: &mut EntityCommands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) -> TerrainQuadTreeChild {
-        let node = self.node.split(quadrant, self.level + 1);
-        let center = node.center.clone();
+    fn new_child(&self, quadrant: Quadrant, entity_commands: &mut EntityCommands, mesh_generator: &mut ResMut<MeshGenerator>) -> TerrainQuadTreeChild {
+        let node = Arc::new(RwLock::new(self.node.write().unwrap().split(quadrant, self.level + 1)));
         let child: TerrainQuadTreeChild = TerrainQuadTree::new(
             self as *const TerrainQuadTree,
-            node,
+            node.clone(),
             self.max_depth,
             self.level + 1
         ).into();
 
-        let render_component = Self::compute_mesh(center, meshes, materials);
-        let rendered_terrain_bundle = RenderedTerrainBundle { terrain_component: (&child).into(), render_component };
-        let child_component = entity_commands.commands().spawn(rendered_terrain_bundle).id();
+        mesh_generator.queue_generate_mesh_request(Request::create(node.clone()));
+        let child_component = entity_commands.commands().spawn::<TerrainQuadTreeComponent>((&child).into()).id();
+        node.write().unwrap().entity = Some(child_component);
         entity_commands.add_child(child_component);
         child
     }
 
-    pub(crate) fn compute_mesh(center: Vec3, mut meshes: &mut ResMut<Assets<Mesh>>, mut materials: &mut ResMut<Assets<StandardMaterial>>) -> PbrBundle {
-        PbrBundle {
-            mesh: meshes.add(Mesh::try_from(Icosphere { radius: 0.1, subdivisions: 2 }).unwrap()),
-            material: materials.add(StandardMaterial {
-                base_color: Color::hex("#ffd891").unwrap(),
-                ..default()
-            }),
-            transform: Transform::from_translation(center),
-            visibility: Visibility::Visible,
-            ..default()
-        }
+}
+
+impl From<TerrainQuadTree> for TerrainQuadTreeChild {
+    fn from(val: TerrainQuadTree) -> Self {
+        TerrainQuadTreeChild(Arc::new(RwLock::new(val)))
     }
 }
 
-#[derive(Bundle)]
-pub(crate) struct RenderedTerrainBundle {
-    pub(crate) terrain_component: TerrainQuadTreeComponent,
-    pub(crate) render_component: PbrBundle,
-}
-
-impl Into<TerrainQuadTreeChild> for TerrainQuadTree {
-    fn into(self) -> TerrainQuadTreeChild {
-        TerrainQuadTreeChild(Arc::new(RwLock::new(self)))
-    }
-}
-
-impl Into<TerrainQuadTreeComponent> for &TerrainQuadTreeChild {
-    fn into(self) -> TerrainQuadTreeComponent {
-        TerrainQuadTreeComponent(Arc::downgrade(&self.0))
+impl From<&TerrainQuadTreeChild> for TerrainQuadTreeComponent {
+    fn from(val: &TerrainQuadTreeChild) -> Self {
+        TerrainQuadTreeComponent(Arc::downgrade(&val.0))
     }
 }
 
@@ -152,7 +134,8 @@ impl TerrainQuadTreeNode {
         let offsets = (offsets.0 / (2.0f64.powf(level as f64)), offsets.1 / 2.0f64.powf(level as f64));
         TerrainQuadTreeNode {
             center: Self::compute_center_for_face(&self.face, offsets),
-            face: self.face.clone()
+            face: self.face.clone(),
+            entity: None
         }
     }
 
@@ -169,8 +152,7 @@ pub(crate) fn update(
     mut commands: Commands,
     quad_tree_query: Query<(Entity, &TerrainQuadTreeComponent)>,
     camera_query: Query<(&Transform, With<MainCamera>)>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut mesh_generator: ResMut<MeshGenerator>,
 ) {
     let camera_transform = camera_query.get_single().expect("No camera found").0;
     for (entity, quad_tree) in quad_tree_query.iter() {
@@ -178,22 +160,24 @@ pub(crate) fn update(
             Some(quad_tree_lock) => {
                 let (center, level) = {
                     let quad_tree = quad_tree_lock.read().unwrap();
-                    (quad_tree.node.center, quad_tree.level)
+                    (quad_tree.node.clone().read().unwrap().center, quad_tree.level)
                 };
                 let distance_to_camera = (camera_transform.translation - center).length();
-                let threshold = 2.0f32.powf(-(level as f32));
+                let threshold = 2.0f32.powf(-(level as f32)) * 3.0;
                 let mut quad_tree = quad_tree_lock.write().unwrap();
                 let mut entity_commands = commands.entity(entity);
                 if distance_to_camera < threshold {
                     entity_commands.insert(VisibilityBundle { visibility: Visibility::Hidden, computed: ComputedVisibility::default() });
-                    quad_tree.split(entity_commands, &mut meshes, &mut materials);
+                    quad_tree.split(entity_commands, &mut mesh_generator);
                 } else {
                     entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, computed: ComputedVisibility::default() });
                     quad_tree.merge()
                 }
             }
             None => {
-                commands.get_entity(entity).map(|entity| entity.despawn_recursive());
+                if let Some(entity) = commands.get_entity(entity) {
+                    entity.despawn_recursive();
+                }
             }
         }
     }
