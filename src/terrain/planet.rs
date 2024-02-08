@@ -1,14 +1,12 @@
-use bevy::asset::Assets;
 use bevy::hierarchy::BuildChildren;
-use bevy::pbr::StandardMaterial;
-use bevy::prelude::{Commands, Component, default, Mesh, ResMut, SpatialBundle, Transform, Visibility};
+use bevy::prelude::{Commands, Component, default, ResMut, SpatialBundle, Transform, Visibility};
 
-use crate::terrain::terrain_quad_tree::{RenderedTerrainBundle, TerrainQuadTree, TerrainQuadTreeChild};
+use crate::terrain::mesh_generator::{MeshGenerator, Request};
+use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeChild, TerrainQuadTreeComponent};
 
 #[derive(Component)]
 pub(crate) struct Planet {
     terrain_faces: [TerrainQuadTreeChild; 6],
-    radius: u8
 }
 
 #[derive(Clone, Debug)]
@@ -22,12 +20,14 @@ pub(crate) enum Face {
 }
 
 impl Planet {
-    pub(crate) fn spawn(commands: &mut Commands, meshes: &mut ResMut<Assets<Mesh>>, materials: &mut ResMut<Assets<StandardMaterial>>) {
-        let planet = Planet::new(2);
+    pub(crate) fn spawn(commands: &mut Commands, mesh_generator: &mut ResMut<MeshGenerator>) {
+        let planet = Planet::new(4);
         let terrain_components = planet.terrain_faces.iter().map(|terrain_face| {
-            let render_component = TerrainQuadTree::compute_mesh(terrain_face.0.read().unwrap().node.center.clone(), meshes, materials);
-            let rendered_terrain = RenderedTerrainBundle { terrain_component: terrain_face.into(), render_component };
-            commands.spawn::<RenderedTerrainBundle>(rendered_terrain).id()
+            let entity = commands.spawn::<TerrainQuadTreeComponent>(terrain_face.into()).id();
+            let node = terrain_face.0.write().unwrap().node.clone();
+            node.write().unwrap().entity = Some(entity);
+            mesh_generator.queue_generate_mesh_request(Request::create(node));
+            entity
         }).collect::<Vec<_>>();
 
         let mut planet = commands.spawn((planet, SpatialBundle { transform: Transform::default(), visibility: Visibility::Visible, ..default() }));
@@ -44,6 +44,6 @@ impl Planet {
             TerrainQuadTree::root(Face::Back, radius).into()
         ];
 
-        Planet { terrain_faces, radius }
+        Planet { terrain_faces }
     }
 }
