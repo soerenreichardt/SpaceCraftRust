@@ -26,15 +26,16 @@ pub(crate) enum RequestKind {
 pub(crate) struct Request {
     kind: RequestKind,
     node: Arc<RwLock<TerrainQuadTreeNode>>,
+    scale: f32
 }
 
 impl Request {
-    pub(crate) fn create(node: Arc<RwLock<TerrainQuadTreeNode>>) -> Self {
-        Request { kind: RequestKind::Create, node }
+    pub(crate) fn create(node: Arc<RwLock<TerrainQuadTreeNode>>, scale: f32) -> Self {
+        Request { kind: RequestKind::Create, node, scale }
     }
 
     pub(crate) fn remove(node: Arc<RwLock<TerrainQuadTreeNode>>) -> Self {
-        Request { kind: RequestKind::Remove, node }
+        Request { kind: RequestKind::Remove, node, scale: 0.0 }
     }
 }
 
@@ -61,7 +62,7 @@ pub(crate) fn update(generator: ResMut<MeshGenerator>, mut commands: Commands, m
             RequestKind::Create => {
                 let node = request.node.read().unwrap();
                 let entity = node.entity.unwrap();
-                let mesh = compute_mesh(node.center, node.length, node.face.perpendicular_vectors(), &generator, &mut meshes, &mut materials);
+                let mesh = compute_mesh(node.center, node.length, node.face.perpendicular_vectors(), request.scale, &generator, &mut meshes, &mut materials);
                 commands.entity(entity).insert(mesh);
             }
             RequestKind::Remove => {
@@ -76,6 +77,7 @@ fn compute_mesh(
     center: Vec3,
     length: f32,
     perpendicular_vectors: (Vec3, Vec3),
+    scale: f32,
     mesh_generator: &ResMut<MeshGenerator>,
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
@@ -89,7 +91,8 @@ fn compute_mesh(
     let mut vertices: Vec<[f32; 3]> = Vec::with_capacity((MESH_SIZE + 1) * (MESH_SIZE + 1));
     for y in 0..MESH_SIZE + 1 {
         for x in 0..MESH_SIZE + 1 {
-            let vertex = axis_a * (x as f32 * step_size) + axis_b * (y as f32 * step_size) - offset_a - offset_b;
+            let vertex = axis_a * (x as f32 * step_size) + axis_b * (y as f32 * step_size) - offset_a - offset_b + center;
+            // let vertex = vertex.normalize() * scale;
             vertices.push(vertex.into());
         }
     }
@@ -103,7 +106,6 @@ fn compute_mesh(
             base_color: Color::rgb(rng.gen(), rng.gen(), rng.gen()),
             ..default()
         }),
-        transform: Transform::from_translation(center),
         visibility: Visibility::Visible,
         ..default()
     }

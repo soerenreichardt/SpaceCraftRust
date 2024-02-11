@@ -45,12 +45,13 @@ impl Face {
 
 impl Planet {
     pub(crate) fn spawn(commands: &mut Commands, mesh_generator: &mut ResMut<MeshGenerator>) {
-        let planet = Planet::new(4);
+        let radius = 6;
+        let planet = Planet::new(radius);
         let terrain_components = planet.terrain_faces.iter().map(|terrain_face| {
             let entity = commands.spawn::<TerrainQuadTreeComponent>(terrain_face.into()).id();
             let node = terrain_face.0.write().unwrap().node.clone();
             node.write().unwrap().entity = Some(entity);
-            mesh_generator.queue_generate_mesh_request(Request::create(node));
+            mesh_generator.queue_generate_mesh_request(Request::create(node, radius as f32));
             entity
         }).collect::<Vec<_>>();
 

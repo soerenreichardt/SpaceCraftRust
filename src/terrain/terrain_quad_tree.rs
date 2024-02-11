@@ -3,12 +3,13 @@ use std::sync::{Arc, RwLock, Weak};
 use bevy::ecs::system::EntityCommands;
 use bevy::hierarchy::{BuildChildren, DespawnRecursiveExt};
 use bevy::math::Vec3;
-use bevy::prelude::{Commands, Component, ComputedVisibility, default, Entity, Query, ResMut, SpatialBundle, Transform, Visibility, VisibilityBundle, With};
+use bevy::prelude::{Commands, Component, ComputedVisibility, Entity, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::{MeshGenerator, Request};
 use crate::terrain::planet::Face;
 
+#[derive(PartialEq, Clone)]
 pub(crate) enum Quadrant {
     TopLeft,
     TopRight,
@@ -39,7 +40,8 @@ pub(crate) struct TerrainQuadTreeComponent(Weak<RwLock<TerrainQuadTree>>);
 
 impl TerrainQuadTree {
     pub(crate) fn root(face: Face, max_depth: u8) -> Self {
-        let center = face.direction_vector();
+        let scale = max_depth as f32;
+        let center = face.direction_vector() * scale;
         TerrainQuadTree {
             parent: None,
             children: None,
@@ -47,7 +49,7 @@ impl TerrainQuadTree {
                 center,
                 face,
                 entity: None,
-                length: 2.0,
+                length: 2.0 * scale,
             })),
             max_depth,
             level: 0,
@@ -89,7 +91,7 @@ impl TerrainQuadTree {
     }
 
     fn new_child(&self, quadrant: Quadrant, entity_commands: &mut EntityCommands, mesh_generator: &mut ResMut<MeshGenerator>) -> TerrainQuadTreeChild {
-        let node = Arc::new(RwLock::new(self.node.write().unwrap().split(quadrant, self.level + 1)));
+        let node = Arc::new(RwLock::new(self.node.write().unwrap().split(quadrant.clone(), self.max_depth as f32)));
         let child: TerrainQuadTreeChild = TerrainQuadTree::new(
             self as *const TerrainQuadTree,
             node.clone(),
@@ -101,7 +103,7 @@ impl TerrainQuadTree {
         node.write().unwrap().entity = Some(child_component);
         entity_commands.add_child(child_component);
 
-        mesh_generator.queue_generate_mesh_request(Request::create(node.clone()));
+        mesh_generator.queue_generate_mesh_request(Request::create(node.clone(), self.max_depth as f32));
 
         child
     }
@@ -121,27 +123,30 @@ impl From<&TerrainQuadTreeChild> for TerrainQuadTreeComponent {
 }
 
 impl TerrainQuadTreeNode {
-    fn split(&self, quadrant: Quadrant, level: u8) -> TerrainQuadTreeNode {
+    fn split(&self, quadrant: Quadrant, scale: f32) -> TerrainQuadTreeNode {
         let offsets: (f64, f64) = match quadrant {
-            Quadrant::TopLeft => (-1.0, 1.0),
-            Quadrant::TopRight => (1.0, 1.0),
-            Quadrant::BottomLeft => (-1.0, -1.0),
-            Quadrant::BottomRight => (1.0, -1.0)
+            Quadrant::TopLeft => (-0.5, 0.5),
+            Quadrant::TopRight => (0.5, 0.5),
+            Quadrant::BottomLeft => (-0.5, -0.5),
+            Quadrant::BottomRight => (0.5, -0.5)
         };
-        let offsets = (offsets.0 / (2.0f64.powf(level as f64)), offsets.1 / 2.0f64.powf(level as f64));
+        let length = self.length / 2.0;
+        let offsets = (offsets.0 * length as f64, offsets.1 * length as f64);
+        let center = Self::compute_center_for_face(&self.face, self.center, offsets);
+        let scaled_center = self.face.direction_vector() * scale + center;
         TerrainQuadTreeNode {
-            center: Self::compute_center_for_face(&self.face, offsets),
+            center: scaled_center,
             face: self.face.clone(),
             entity: None,
-            length: self.length / 2.0
+            length
         }
     }
 
-    fn compute_center_for_face(face: &Face, (offset1, offset2): (f64, f64)) -> Vec3 {
+    fn compute_center_for_face(face: &Face, center: Vec3, (offset1, offset2): (f64, f64)) -> Vec3 {
         match face {
-            Face::Top | Face::Bottom => Vec3::new(offset1 as f32, 0.0, offset2 as f32),
-            Face::Left | Face::Right => Vec3::new(0.0, offset1 as f32, offset2 as f32),
-            Face::Front | Face::Back => Vec3::new(offset1 as f32, offset2 as f32, 0.0)
+            Face::Top | Face::Bottom => Vec3::new(center.x + offset1 as f32, 0.0, center.z + offset2 as f32),
+            Face::Left | Face::Right => Vec3::new(0.0, center.y + offset1 as f32, center.z + offset2 as f32),
+            Face::Front | Face::Back => Vec3::new(center.x + offset1 as f32, center.y + offset2 as f32, 0.0)
         }
     }
 }
@@ -156,12 +161,12 @@ pub(crate) fn update(
     for (entity, quad_tree) in quad_tree_query.iter() {
         match quad_tree.0.upgrade() {
             Some(quad_tree_lock) => {
-                let (center, level) = {
+                let (center, level, scale) = {
                     let quad_tree = quad_tree_lock.read().unwrap();
-                    (quad_tree.node.clone().read().unwrap().center, quad_tree.level)
+                    (quad_tree.node.clone().read().unwrap().center, quad_tree.level, quad_tree.max_depth)
                 };
                 let distance_to_camera = (camera_transform.translation - center).length();
-                let threshold = 2.0f32.powf(-(level as f32)) * 6.0;
+                let threshold = 2.0f32.powf(-(level as f32)) * 10.0 * scale as f32;
                 let mut quad_tree = quad_tree_lock.write().unwrap();
                 let mut entity_commands = commands.entity(entity);
                 if distance_to_camera < threshold {
