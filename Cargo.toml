@@ -16,3 +16,4 @@ opt-level = 3
 bevy = { version = "0.11.3", features = ["dynamic_linking"] }
 concurrent-queue = "2.3.0"
 once_cell = "1.18.0"
+rand = "0.8.5"

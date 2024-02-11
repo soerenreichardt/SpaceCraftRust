@@ -1,5 +1,5 @@
 use bevy::hierarchy::BuildChildren;
-use bevy::prelude::{Commands, Component, default, ResMut, SpatialBundle, Transform, Visibility};
+use bevy::prelude::{Commands, Component, default, ResMut, SpatialBundle, Transform, Vec3, Visibility};
 
 use crate::terrain::mesh_generator::{MeshGenerator, Request};
 use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeChild, TerrainQuadTreeComponent};
@@ -19,14 +19,39 @@ pub(crate) enum Face {
     Back,
 }
 
+impl Face {
+    pub(crate) fn direction_vector(&self) -> Vec3 {
+        match self {
+            Face::Top => Vec3::Y,
+            Face::Bottom => -Vec3::Y,
+            Face::Left => -Vec3::X,
+            Face::Right => Vec3::X,
+            Face::Front => -Vec3::Z,
+            Face::Back => Vec3::Z,
+        }
+    }
+
+    pub(crate) fn perpendicular_vectors(&self) -> (Vec3, Vec3) {
+        match self {
+            Face::Top => (Vec3::X, Vec3::Z),
+            Face::Bottom => (Vec3::X, -Vec3::Z),
+            Face::Left => (Vec3::Y, Vec3::Z),
+            Face::Right => (Vec3::Y, -Vec3::Z),
+            Face::Front => (Vec3::X, Vec3::Y),
+            Face::Back => (Vec3::X, -Vec3::Y),
+        }
+    }
+}
+
 impl Planet {
     pub(crate) fn spawn(commands: &mut Commands, mesh_generator: &mut ResMut<MeshGenerator>) {
-        let planet = Planet::new(4);
+        let radius = 6;
+        let planet = Planet::new(radius);
         let terrain_components = planet.terrain_faces.iter().map(|terrain_face| {
             let entity = commands.spawn::<TerrainQuadTreeComponent>(terrain_face.into()).id();
             let node = terrain_face.0.write().unwrap().node.clone();
             node.write().unwrap().entity = Some(entity);
-            mesh_generator.queue_generate_mesh_request(Request::create(node));
+            mesh_generator.queue_generate_mesh_request(Request::create(node, radius as f32));
             entity
         }).collect::<Vec<_>>();
 
