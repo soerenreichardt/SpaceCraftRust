@@ -23,6 +23,7 @@ pub(crate) struct TerrainQuadTree {
     pub(crate) node: Arc<RwLock<TerrainQuadTreeNode>>,
     pub(crate) max_depth: u8,
     pub(crate) level: u8,
+    pub(crate) scale: f32
 }
 
 #[derive(Debug)]
@@ -39,8 +40,7 @@ pub(crate) struct TerrainQuadTreeChild(pub(crate) Arc<RwLock<TerrainQuadTree>>);
 pub(crate) struct TerrainQuadTreeComponent(Weak<RwLock<TerrainQuadTree>>);
 
 impl TerrainQuadTree {
-    pub(crate) fn root(face: Face, max_depth: u8) -> Self {
-        let scale = max_depth as f32;
+    pub(crate) fn root(face: Face, max_depth: u8, scale: f32) -> Self {
         let center = face.direction_vector() * scale;
         TerrainQuadTree {
             parent: None,
@@ -53,32 +53,36 @@ impl TerrainQuadTree {
             })),
             max_depth,
             level: 0,
+            scale
         }
     }
 
-    pub(crate) fn new(parent: *const TerrainQuadTree, node: Arc<RwLock<TerrainQuadTreeNode>>, max_depth: u8, level: u8) -> Self {
+    pub(crate) fn new(parent: *const TerrainQuadTree, node: Arc<RwLock<TerrainQuadTreeNode>>, max_depth: u8, level: u8, scale: f32) -> Self {
         TerrainQuadTree {
             parent: Some(parent as usize),
             children: None,
             node,
             max_depth,
             level,
+            scale
         }
     }
 
-    pub(crate) fn split(&mut self, mut entity_commands: EntityCommands, mesh_generator: &mut ResMut<MeshGenerator>) {
+    pub(crate) fn split(&mut self, entity_commands: &mut EntityCommands, mesh_generator: &mut ResMut<MeshGenerator>) -> bool {
         if self.children.is_none() && self.level < self.max_depth {
             self.children = Some([
-                self.new_child(Quadrant::TopLeft, &mut entity_commands, mesh_generator),
-                self.new_child(Quadrant::TopRight, &mut entity_commands, mesh_generator),
-                self.new_child(Quadrant::BottomLeft, &mut entity_commands, mesh_generator),
-                self.new_child(Quadrant::BottomRight, &mut entity_commands, mesh_generator),
+                self.new_child(Quadrant::TopLeft, entity_commands, mesh_generator),
+                self.new_child(Quadrant::TopRight, entity_commands, mesh_generator),
+                self.new_child(Quadrant::BottomLeft, entity_commands, mesh_generator),
+                self.new_child(Quadrant::BottomRight, entity_commands, mesh_generator),
             ]);
+            return true;
         }
+        false
     }
 
-    pub(crate) fn merge(&mut self) {
-        self.children.take();
+    pub(crate) fn merge(&mut self) -> bool {
+        self.children.take().is_some()
     }
 
     pub(crate) fn parent(&self) -> Option<&TerrainQuadTree> {
@@ -91,19 +95,20 @@ impl TerrainQuadTree {
     }
 
     fn new_child(&self, quadrant: Quadrant, entity_commands: &mut EntityCommands, mesh_generator: &mut ResMut<MeshGenerator>) -> TerrainQuadTreeChild {
-        let node = Arc::new(RwLock::new(self.node.write().unwrap().split(quadrant.clone(), self.max_depth as f32)));
+        let node = Arc::new(RwLock::new(self.node.write().unwrap().split(quadrant.clone(), self.scale)));
         let child: TerrainQuadTreeChild = TerrainQuadTree::new(
             self as *const TerrainQuadTree,
             node.clone(),
             self.max_depth,
-            self.level + 1
+            self.level + 1,
+            self.scale
         ).into();
 
         let child_component = entity_commands.commands().spawn::<TerrainQuadTreeComponent>((&child).into()).id();
         node.write().unwrap().entity = Some(child_component);
         entity_commands.add_child(child_component);
 
-        mesh_generator.queue_generate_mesh_request(Request::create(node.clone(), self.max_depth as f32));
+        mesh_generator.queue_generate_mesh_request(Request::create(node.clone(), self.scale));
 
         child
     }
@@ -163,18 +168,20 @@ pub(crate) fn update(
             Some(quad_tree_lock) => {
                 let (center, level, scale) = {
                     let quad_tree = quad_tree_lock.read().unwrap();
-                    (quad_tree.node.clone().read().unwrap().center, quad_tree.level, quad_tree.max_depth)
+                    (quad_tree.node.clone().read().unwrap().center, quad_tree.level, quad_tree.scale)
                 };
                 let distance_to_camera = (camera_transform.translation - center).length();
-                let threshold = 2.0f32.powf(-(level as f32)) * 10.0 * scale as f32;
+                let threshold = 2.0f32.powf(-(level as f32)) * 10.0 * scale;
                 let mut quad_tree = quad_tree_lock.write().unwrap();
                 let mut entity_commands = commands.entity(entity);
                 if distance_to_camera < threshold {
-                    entity_commands.insert( VisibilityBundle { visibility: Visibility::Hidden, ..Default::default() });
-                    quad_tree.split(entity_commands, &mut mesh_generator);
+                    if quad_tree.split(&mut entity_commands, &mut mesh_generator) {
+                        entity_commands.insert( VisibilityBundle { visibility: Visibility::Hidden, ..Default::default() });
+                    }
                 } else {
-                    entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, ..Default::default() });
-                    quad_tree.merge()
+                    if quad_tree.merge() {
+                        entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, ..Default::default() });
+                    }
                 }
             }
             None => {

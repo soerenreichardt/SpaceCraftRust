@@ -1,12 +1,13 @@
 use bevy::hierarchy::BuildChildren;
 use bevy::prelude::{Commands, Component, default, ResMut, SpatialBundle, Transform, Vec3, Visibility};
 
-use crate::terrain::mesh_generator::{MeshGenerator, Request};
+use crate::terrain::mesh_generator::{MeshGenerator, Request, MESH_SIZE};
 use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeChild, TerrainQuadTreeComponent};
 
 #[derive(Component)]
 pub(crate) struct Planet {
     terrain_faces: [TerrainQuadTreeChild; 6],
+    scale: f32
 }
 
 #[derive(Clone, Debug)]
@@ -44,14 +45,13 @@ impl Face {
 }
 
 impl Planet {
-    pub(crate) fn spawn(commands: &mut Commands, mesh_generator: &mut ResMut<MeshGenerator>) {
-        let radius = 6;
+    pub(crate) fn spawn(radius: u8, commands: &mut Commands, mesh_generator: &mut ResMut<MeshGenerator>) {
         let planet = Planet::new(radius);
         let terrain_components = planet.terrain_faces.iter().map(|terrain_face| {
             let entity = commands.spawn::<TerrainQuadTreeComponent>(terrain_face.into()).id();
             let node = terrain_face.0.write().unwrap().node.clone();
             node.write().unwrap().entity = Some(entity);
-            mesh_generator.queue_generate_mesh_request(Request::create(node, radius as f32));
+            mesh_generator.queue_generate_mesh_request(Request::create(node, planet.scale));
             entity
         }).collect::<Vec<_>>();
 
@@ -60,15 +60,16 @@ impl Planet {
     }
 
     fn new(radius: u8) -> Self {
+        let scale = 2.0f32.powf(radius as f32 - 1.0) * MESH_SIZE as f32;
         let terrain_faces: [TerrainQuadTreeChild; 6] = [
-            TerrainQuadTree::root(Face::Top, radius).into(),
-            TerrainQuadTree::root(Face::Bottom, radius).into(),
-            TerrainQuadTree::root(Face::Left, radius).into(),
-            TerrainQuadTree::root(Face::Right, radius).into(),
-            TerrainQuadTree::root(Face::Front, radius).into(),
-            TerrainQuadTree::root(Face::Back, radius).into()
+            TerrainQuadTree::root(Face::Top, radius, scale).into(),
+            TerrainQuadTree::root(Face::Bottom, radius, scale).into(),
+            TerrainQuadTree::root(Face::Left, radius, scale).into(),
+            TerrainQuadTree::root(Face::Right, radius, scale).into(),
+            TerrainQuadTree::root(Face::Front, radius, scale).into(),
+            TerrainQuadTree::root(Face::Back, radius, scale).into()
         ];
 
-        Planet { terrain_faces }
+        Planet { terrain_faces, scale }
     }
 }

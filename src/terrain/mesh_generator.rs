@@ -6,10 +6,11 @@ use bevy::render::render_asset::RenderAssetUsages;
 use concurrent_queue::ConcurrentQueue;
 use rand::Rng;
 
+use crate::terrain::planet::Face;
 use crate::terrain::terrain_quad_tree::TerrainQuadTreeNode;
 
+pub(crate) const MESH_SIZE: usize = 16;
 const QUEUE_CAPACITY: usize = 10000;
-const MESH_SIZE: usize = 16;
 
 #[derive(Resource)]
 pub(crate) struct MeshGenerator {
@@ -27,7 +28,7 @@ pub(crate) enum RequestKind {
 pub(crate) struct Request {
     kind: RequestKind,
     node: Arc<RwLock<TerrainQuadTreeNode>>,
-    scale: f32
+    scale: f32,
 }
 
 impl Request {
@@ -63,7 +64,7 @@ pub(crate) fn update(generator: ResMut<MeshGenerator>, mut commands: Commands, m
             RequestKind::Create => {
                 let node = request.node.read().unwrap();
                 let entity = node.entity.unwrap();
-                let mesh = compute_mesh(node.center, node.length, node.face.perpendicular_vectors(), request.scale, &generator, &mut meshes, &mut materials);
+                let mesh = compute_mesh(node.center, node.length, node.face.clone(), request.scale, &generator, &mut meshes, &mut materials);
                 commands.entity(entity).insert(mesh);
             }
             RequestKind::Remove => {
@@ -77,7 +78,7 @@ pub(crate) fn update(generator: ResMut<MeshGenerator>, mut commands: Commands, m
 fn compute_mesh(
     center: Vec3,
     length: f32,
-    perpendicular_vectors: (Vec3, Vec3),
+    face: Face,
     scale: f32,
     mesh_generator: &ResMut<MeshGenerator>,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -86,7 +87,7 @@ fn compute_mesh(
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     let step_size = length / MESH_SIZE as f32;
     let offset = length / 2.0;
-    let (axis_a, axis_b) = perpendicular_vectors;
+    let (axis_a, axis_b) = face.perpendicular_vectors();
     let (offset_a, offset_b) = (axis_a * offset, axis_b * offset);
 
     let mut vertices: Vec<[f32; 3]> = Vec::with_capacity((MESH_SIZE + 1) * (MESH_SIZE + 1));
@@ -97,6 +98,7 @@ fn compute_mesh(
             vertices.push(vertex.into());
         }
     }
+
     mesh.insert_indices(Indices::U32(mesh_generator.indices.clone()));
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
 

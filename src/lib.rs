@@ -5,7 +5,7 @@ use bevy::utils::default;
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::MeshGenerator;
-use crate::terrain::planet::Planet;
+use crate::terrain::planet::{Face, Planet};
 
 pub(crate) mod terrain;
 pub(crate) mod camera;
@@ -23,14 +23,15 @@ impl Plugin for SpaceCraftPlugin {
 
 impl SpaceCraftPlugin {
     fn setup(mut commands: Commands, mut mesh_generator: ResMut<MeshGenerator>) {
+        let radius = 3;
         commands.spawn((
             Camera3dBundle {
-                transform: Transform::from_xyz(0.0, 0.0, 8.0).looking_at(Vec3::default(), Vec3::Y),
+                transform: Transform::from_translation(Face::Back.direction_vector() * (8.0 * 16.0 + 20.0)).looking_at(Vec3::default(), Vec3::Y),
                 projection: PerspectiveProjection { ..default() }.into(),
                 ..default()
             },
             MainCamera
         ));
-        Planet::spawn(&mut commands, &mut mesh_generator);
+        Planet::spawn(radius, &mut commands, &mut mesh_generator);
     }
 }
