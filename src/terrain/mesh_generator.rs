@@ -2,6 +2,7 @@ use std::sync::{Arc, RwLock};
 
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
+use bevy::render::render_asset::RenderAssetUsages;
 use concurrent_queue::ConcurrentQueue;
 use rand::Rng;
 
@@ -82,7 +83,7 @@ fn compute_mesh(
     meshes: &mut ResMut<Assets<Mesh>>,
     materials: &mut ResMut<Assets<StandardMaterial>>,
 ) -> PbrBundle {
-    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList);
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     let step_size = length / MESH_SIZE as f32;
     let offset = length / 2.0;
     let (axis_a, axis_b) = perpendicular_vectors;
@@ -96,7 +97,7 @@ fn compute_mesh(
             vertices.push(vertex.into());
         }
     }
-    mesh.set_indices(Some(Indices::U32(mesh_generator.indices.clone())));
+    mesh.insert_indices(Indices::U32(mesh_generator.indices.clone()));
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
 
     let mut rng = rand::thread_rng();

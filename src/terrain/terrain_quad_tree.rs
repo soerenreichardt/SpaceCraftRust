@@ -3,7 +3,7 @@ use std::sync::{Arc, RwLock, Weak};
 use bevy::ecs::system::EntityCommands;
 use bevy::hierarchy::{BuildChildren, DespawnRecursiveExt};
 use bevy::math::Vec3;
-use bevy::prelude::{Commands, Component, ComputedVisibility, Entity, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
+use bevy::prelude::{Commands, Component, Entity, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::{MeshGenerator, Request};
@@ -154,10 +154,10 @@ impl TerrainQuadTreeNode {
 pub(crate) fn update(
     mut commands: Commands,
     quad_tree_query: Query<(Entity, &TerrainQuadTreeComponent)>,
-    camera_query: Query<(&Transform, With<MainCamera>)>,
+    camera_query: Query<&Transform, With<MainCamera>>,
     mut mesh_generator: ResMut<MeshGenerator>,
 ) {
-    let camera_transform = camera_query.get_single().expect("No camera found").0;
+    let camera_transform = camera_query.get_single().expect("No camera found");
     for (entity, quad_tree) in quad_tree_query.iter() {
         match quad_tree.0.upgrade() {
             Some(quad_tree_lock) => {
@@ -170,10 +170,10 @@ pub(crate) fn update(
                 let mut quad_tree = quad_tree_lock.write().unwrap();
                 let mut entity_commands = commands.entity(entity);
                 if distance_to_camera < threshold {
-                    entity_commands.insert(VisibilityBundle { visibility: Visibility::Hidden, computed: ComputedVisibility::default() });
+                    entity_commands.insert( VisibilityBundle { visibility: Visibility::Hidden, ..Default::default() });
                     quad_tree.split(entity_commands, &mut mesh_generator);
                 } else {
-                    entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, computed: ComputedVisibility::default() });
+                    entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, ..Default::default() });
                     quad_tree.merge()
                 }
             }
