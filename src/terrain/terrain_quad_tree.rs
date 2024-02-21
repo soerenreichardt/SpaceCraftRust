@@ -178,7 +178,6 @@ pub(crate) fn update(
                     quad_tree.merge();
                     // TODO: this probably also needs to be handled in a system
                     entity_commands.insert(VisibilityBundle { visibility: Visibility::Visible, ..Default::default() });
-                    entity_commands.despawn_descendants();
                 }
             }
             None => {

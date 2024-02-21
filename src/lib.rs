@@ -1,4 +1,5 @@
 use bevy::app::{App, Plugin, PreUpdate, Startup, Update};
+use bevy::hierarchy::BuildChildren;
 use bevy::math::Vec3;
 use bevy::prelude::{Camera3dBundle, Commands, IntoSystemConfigs, PerspectiveProjection, ResMut, Transform};
 use bevy::utils::default;
