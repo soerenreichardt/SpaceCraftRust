@@ -1,8 +1,11 @@
 use bevy::app::{App, Plugin, PreUpdate, Startup, Update};
+use bevy::asset::Assets;
 use bevy::hierarchy::BuildChildren;
 use bevy::math::Vec3;
-use bevy::prelude::{Camera3dBundle, Commands, IntoSystemConfigs, PerspectiveProjection, ResMut, Transform};
+use bevy::pbr::{DirectionalLightBundle, PbrBundle, StandardMaterial};
+use bevy::prelude::{Camera3dBundle, Commands, IntoSystemConfigs, Mesh, PerspectiveProjection, ResMut, shape, Transform};
 use bevy::utils::default;
+use shape::Cube;
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::MeshGenerator;
@@ -26,7 +29,7 @@ impl Plugin for SpaceCraftPlugin {
 }
 
 impl SpaceCraftPlugin {
-    fn setup(mut commands: Commands, mut mesh_generator: ResMut<MeshGenerator>) {
+    fn setup(mut commands: Commands, mut mesh_generator: ResMut<MeshGenerator>, mut meshes: ResMut<Assets<Mesh>>, mut materials: ResMut<Assets<StandardMaterial>>) {
         let radius = 5;
         commands.spawn((
             Camera3dBundle {
@@ -37,5 +40,14 @@ impl SpaceCraftPlugin {
             MainCamera
         ));
         Planet::spawn(radius, &mut commands, &mut mesh_generator);
+        commands.spawn(PbrBundle {
+            mesh: meshes.add(Mesh::from(Cube { size: 10.0 })),
+            material: materials.add(StandardMaterial::default()),
+            ..default()
+        });
+        commands.spawn(DirectionalLightBundle {
+            transform: Transform::from_translation(Vec3::new(15.0, 15.0, 15.0)),
+            ..default()
+        });
     }
 }

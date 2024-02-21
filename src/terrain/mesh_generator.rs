@@ -4,7 +4,6 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use concurrent_queue::ConcurrentQueue;
 use noise::{BasicMulti, NoiseFn, Perlin};
-use rand::Rng;
 
 use crate::terrain::planet::Face;
 use crate::terrain::terrain_quad_tree::TerrainQuadTreeNode;
@@ -15,8 +14,7 @@ const QUEUE_CAPACITY: usize = 10000;
 #[derive(Resource)]
 pub(crate) struct MeshGenerator {
     indices: Vec<u32>,
-    queue: ConcurrentQueue<Request>,
-    noise: Arc<BasicMulti<Perlin>>,
+    queue: ConcurrentQueue<Request>
 }
 
 #[derive(Component)]
@@ -51,13 +49,9 @@ impl MeshGenerator {
             .split(',')
             .map(|s| s.trim().parse().unwrap())
             .collect();
-        let mut noise = BasicMulti::new(42);
-        noise.frequency = 2.0;
-        let noise = Arc::new(noise);
         MeshGenerator {
             indices,
-            queue: ConcurrentQueue::bounded(QUEUE_CAPACITY),
-            noise,
+            queue: ConcurrentQueue::bounded(QUEUE_CAPACITY)
         }
     }
 
@@ -72,7 +66,16 @@ pub(crate) fn update(generator: ResMut<MeshGenerator>, mut commands: Commands, m
             RequestKind::Create => {
                 let node = request.node.read().unwrap();
                 let entity = node.entity.unwrap();
-                let mesh = compute_mesh(node.center, node.length, node.face.clone(), request.scale, &generator, &mut meshes, &mut materials);
+                let mesh = compute_mesh(
+                    node.center,
+                    node.length,
+                    node.face.clone(),
+                    &node.noise,
+                    request.scale,
+                    &generator,
+                    &mut meshes,
+                    &mut materials
+                );
                 commands.entity(entity).insert((mesh, MeshAvailable));
             }
             RequestKind::Remove => {
@@ -87,6 +90,7 @@ fn compute_mesh(
     center: Vec3,
     length: f32,
     face: Face,
+    noise: &BasicMulti<Perlin>,
     scale: f32,
     mesh_generator: &ResMut<MeshGenerator>,
     meshes: &mut ResMut<Assets<Mesh>>,
@@ -99,26 +103,28 @@ fn compute_mesh(
     let (offset_a, offset_b) = (axis_a * offset, axis_b * offset);
 
     let mut vertices: Vec<[f32; 3]> = Vec::with_capacity((MESH_SIZE + 1) * (MESH_SIZE + 1));
+    let mut normals: Vec<[f32; 3]> = Vec::with_capacity(MESH_SIZE * MESH_SIZE);
     for y in 0..MESH_SIZE + 1 {
         for x in 0..MESH_SIZE + 1 {
             let vertex = axis_a * (x as f32 * step_size) + axis_b * (y as f32 * step_size) - offset_a - offset_b + center;
 
-            let noise = mesh_generator.noise.get(transform_vertex_for_noise(vertex, scale));
+            let noise = noise.get(transform_vertex_for_noise(vertex, scale));
 
             let vertex = vertex.normalize() * scale;
             let vertex = vertex * (1.0 + (noise as f32 * 0.1));
-            vertices.push(vertex.into());
+            vertices.push(vertex.clone().into());
         }
     }
 
     mesh.set_indices(Some(Indices::U32(mesh_generator.indices.clone())));
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+    mesh.duplicate_vertices();
+    mesh.compute_flat_normals();
 
-    let mut rng = rand::thread_rng();
     PbrBundle {
         mesh: meshes.add(mesh),
         material: materials.add(StandardMaterial {
-            base_color: Color::rgb(rng.gen(), rng.gen(), rng.gen()),
+            base_color: Color::rgb(181.0 / 255.0, 144.0 / 255.0, 11.0 / 255.0),
             ..default()
         }),
         visibility: Visibility::Hidden,

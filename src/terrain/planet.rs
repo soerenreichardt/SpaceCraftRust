@@ -1,5 +1,7 @@
+use std::sync::Arc;
 use bevy::hierarchy::BuildChildren;
 use bevy::prelude::{Commands, Component, default, ResMut, SpatialBundle, Transform, Vec3, Visibility};
+use noise::{BasicMulti, Perlin};
 
 use crate::terrain::mesh_generator::{MeshGenerator, Request, MESH_SIZE};
 use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeChild, TerrainQuadTreeComponent};
@@ -7,7 +9,8 @@ use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeChild, T
 #[derive(Component)]
 pub(crate) struct Planet {
     terrain_faces: [TerrainQuadTreeChild; 6],
-    scale: f32
+    scale: f32,
+    noise: Arc<BasicMulti<Perlin>>,
 }
 
 #[derive(Clone, Debug)]
@@ -61,15 +64,20 @@ impl Planet {
 
     fn new(radius: u8) -> Self {
         let scale = 2.0f32.powf(radius as f32 - 1.0) * MESH_SIZE as f32;
+
+        let mut noise = BasicMulti::new(42);
+        noise.frequency = 2.0;
+        let noise = Arc::new(noise);
+
         let terrain_faces: [TerrainQuadTreeChild; 6] = [
-            TerrainQuadTree::root(Face::Top, radius, scale).into(),
-            TerrainQuadTree::root(Face::Bottom, radius, scale).into(),
-            TerrainQuadTree::root(Face::Left, radius, scale).into(),
-            TerrainQuadTree::root(Face::Right, radius, scale).into(),
-            TerrainQuadTree::root(Face::Front, radius, scale).into(),
-            TerrainQuadTree::root(Face::Back, radius, scale).into()
+            TerrainQuadTree::root(Face::Top, radius, scale, noise.clone()).into(),
+            TerrainQuadTree::root(Face::Bottom, radius, scale, noise.clone()).into(),
+            TerrainQuadTree::root(Face::Left, radius, scale, noise.clone()).into(),
+            TerrainQuadTree::root(Face::Right, radius, scale, noise.clone()).into(),
+            TerrainQuadTree::root(Face::Front, radius, scale, noise.clone()).into(),
+            TerrainQuadTree::root(Face::Back, radius, scale, noise.clone()).into()
         ];
 
-        Planet { terrain_faces, scale }
+        Planet { terrain_faces, scale, noise }
     }
 }

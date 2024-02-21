@@ -4,6 +4,7 @@ use bevy::ecs::system::EntityCommands;
 use bevy::hierarchy::{BuildChildren, DespawnRecursiveExt, Parent};
 use bevy::math::Vec3;
 use bevy::prelude::{Commands, Component, Entity, Query, ResMut, Transform, Visibility, VisibilityBundle, With};
+use noise::{BasicMulti, Perlin};
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::{MeshAvailable, MeshGenerator, Request};
@@ -32,6 +33,7 @@ pub(crate) struct TerrainQuadTreeNode {
     pub(crate) face: Face,
     pub(crate) entity: Option<Entity>,
     pub(crate) length: f32,
+    pub(crate) noise: Arc<BasicMulti<Perlin>>,
 }
 
 pub(crate) struct TerrainQuadTreeChild(pub(crate) Arc<RwLock<TerrainQuadTree>>);
@@ -40,7 +42,7 @@ pub(crate) struct TerrainQuadTreeChild(pub(crate) Arc<RwLock<TerrainQuadTree>>);
 pub(crate) struct TerrainQuadTreeComponent(Weak<RwLock<TerrainQuadTree>>);
 
 impl TerrainQuadTree {
-    pub(crate) fn root(face: Face, max_depth: u8, scale: f32) -> Self {
+    pub(crate) fn root(face: Face, max_depth: u8, scale: f32, noise: Arc<BasicMulti<Perlin>>) -> Self {
         let center = face.direction_vector() * scale;
         TerrainQuadTree {
             parent: None,
@@ -50,6 +52,7 @@ impl TerrainQuadTree {
                 face,
                 entity: None,
                 length: 2.0 * scale,
+                noise
             })),
             max_depth,
             level: 0,
@@ -141,6 +144,7 @@ impl TerrainQuadTreeNode {
             face: self.face.clone(),
             entity: None,
             length,
+            noise: self.noise.clone()
         }
     }
 

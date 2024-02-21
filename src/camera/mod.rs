@@ -23,7 +23,7 @@ pub(crate) fn update_camera_position(
 
     let translation = handle_movement(keys, &transform);
 
-    transform.translation += translation * 10.0;
+    transform.translation += translation * 1.0;
 }
 
 fn handle_rotation(motion_events: &mut EventReader<MouseMotion>, transform: &mut Mut<Transform>) {
@@ -40,15 +40,15 @@ fn handle_rotation(motion_events: &mut EventReader<MouseMotion>, transform: &mut
 
 fn handle_mouse_click(mouse_buttons: Res<Input<MouseButton>>, windows: &mut Query<&mut Window, With<PrimaryWindow>>) -> bool {
     let mut primary_window = windows.single_mut();
-    if mouse_buttons.just_pressed(MouseButton::Left) {
+    if mouse_buttons.just_pressed(MouseButton::Right) {
         primary_window.cursor.grab_mode = CursorGrabMode::Locked;
         primary_window.cursor.visible = false;
         return true;
     }
-    if mouse_buttons.pressed(MouseButton::Left) {
+    if mouse_buttons.pressed(MouseButton::Right) {
         return true;
     }
-    if mouse_buttons.just_released(MouseButton::Left) {
+    if mouse_buttons.just_released(MouseButton::Right) {
         primary_window.cursor.grab_mode = CursorGrabMode::None;
         primary_window.cursor.visible = true;
     }
