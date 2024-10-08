@@ -195,10 +195,10 @@ pub(crate) fn update(
 
 pub(crate) fn make_new_mesh_visible(
     mut commands: Commands,
-    query: Query<(&TerrainQuadTreeComponent, Option<&Parent>, With<MeshAvailable>)>,
+    query: Query<(&TerrainQuadTreeComponent, Option<&Parent>), With<MeshAvailable>>,
     parents_query: Query<&TerrainQuadTreeComponent>,
 ) {
-    for (tree, parent, _) in query.iter() {
+    for (tree, parent) in query.iter() {
         if let Some(parent) = parent {
             if let Ok(parent_component) = parents_query.get(parent.get()) {
                 if let Some(parent_entity) = read_tree_entity(parent_component) {

@@ -3,9 +3,8 @@ use bevy::asset::Assets;
 use bevy::hierarchy::BuildChildren;
 use bevy::math::Vec3;
 use bevy::pbr::{DirectionalLightBundle, PbrBundle, StandardMaterial};
-use bevy::prelude::{Camera3dBundle, Commands, IntoSystemConfigs, Mesh, PerspectiveProjection, ResMut, shape, Transform};
+use bevy::prelude::{Camera3dBundle, Commands, Cuboid, IntoSystemConfigs, Mesh, PerspectiveProjection, ResMut, Transform};
 use bevy::utils::default;
-use shape::Cube;
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::MeshGenerator;
@@ -41,7 +40,7 @@ impl SpaceCraftPlugin {
         ));
         Planet::spawn(radius, &mut commands, &mut mesh_generator);
         commands.spawn(PbrBundle {
-            mesh: meshes.add(Mesh::from(Cube { size: 10.0 })),
+            mesh: meshes.add(Mesh::from(Cuboid { half_size: Vec3::splat(5.0) })),
             material: materials.add(StandardMaterial::default()),
             ..default()
         });
