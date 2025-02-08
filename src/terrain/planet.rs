@@ -1,83 +1,50 @@
-use std::sync::Arc;
-use bevy::hierarchy::BuildChildren;
-use bevy::prelude::{Commands, Component, default, ResMut, SpatialBundle, Transform, Vec3, Visibility};
-use noise::{BasicMulti, Perlin};
+use crate::camera::MainCamera;
+use crate::terrain::mesh_generator::MeshGenerator2;
+use crate::terrain::terrain_quad_tree::TerrainQuadTree;
+use bevy::prelude::*;
+use crate::terrain::Face;
 
-use crate::terrain::mesh_generator::{MeshGenerator, Request, MESH_SIZE};
-use crate::terrain::terrain_quad_tree::{TerrainQuadTree, TerrainQuadTreeChild, TerrainQuadTreeComponent};
+type PlanetSide = TerrainQuadTree;
 
 #[derive(Component)]
 pub(crate) struct Planet {
-    terrain_faces: [TerrainQuadTreeChild; 6],
-    scale: f32,
-    noise: Arc<BasicMulti<Perlin>>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum Face {
-    Top,
-    Bottom,
-    Left,
-    Right,
-    Front,
-    Back,
-}
-
-impl Face {
-    pub(crate) fn direction_vector(&self) -> Vec3 {
-        match self {
-            Face::Top => Vec3::Y,
-            Face::Bottom => -Vec3::Y,
-            Face::Left => -Vec3::X,
-            Face::Right => Vec3::X,
-            Face::Front => -Vec3::Z,
-            Face::Back => Vec3::Z,
-        }
-    }
-
-    pub(crate) fn perpendicular_vectors(&self) -> (Vec3, Vec3) {
-        match self {
-            Face::Top => (Vec3::X, Vec3::Z),
-            Face::Bottom => (Vec3::X, -Vec3::Z),
-            Face::Left => (Vec3::Y, Vec3::Z),
-            Face::Right => (Vec3::Y, -Vec3::Z),
-            Face::Front => (Vec3::X, Vec3::Y),
-            Face::Back => (Vec3::X, -Vec3::Y),
-        }
-    }
+    planet_sides: [PlanetSide; 6],
 }
 
 impl Planet {
-    pub(crate) fn spawn(radius: u8, commands: &mut Commands, mesh_generator: &mut ResMut<MeshGenerator>) {
-        let planet = Planet::new(radius);
-        let terrain_components = planet.terrain_faces.iter().map(|terrain_face| {
-            let entity = commands.spawn::<TerrainQuadTreeComponent>(terrain_face.into()).id();
-            let node = terrain_face.0.write().unwrap().node.clone();
-            node.write().unwrap().entity = Some(entity);
-            mesh_generator.queue_generate_mesh_request(Request::create(node, planet.scale));
-            entity
-        }).collect::<Vec<_>>();
-
-        let mut planet = commands.spawn((planet, SpatialBundle { transform: Transform::default(), visibility: Visibility::Visible, ..default() }));
-        planet.push_children(&terrain_components);
+    pub(crate) fn new(size: u8, scale: f32, commands: &mut Commands, mesh_generator: &mut MeshGenerator2, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
+        Planet {
+            planet_sides: [
+                PlanetSide::new(size, scale, Face::Back, commands, mesh_generator, meshes, materials),
+                PlanetSide::new(size, scale, Face::Front, commands, mesh_generator, meshes, materials),
+                PlanetSide::new(size, scale, Face::Left, commands, mesh_generator, meshes, materials),
+                PlanetSide::new(size, scale, Face::Right, commands, mesh_generator, meshes, materials),
+                PlanetSide::new(size, scale, Face::Top, commands, mesh_generator, meshes, materials),
+                PlanetSide::new(size, scale, Face::Bottom, commands, mesh_generator, meshes, materials),
+            ]
+        }
     }
+}
 
-    fn new(radius: u8) -> Self {
-        let scale = 2.0f32.powf(radius as f32 - 1.0) * MESH_SIZE as f32;
+#[derive(Event)]
+pub struct ChunkCreateEvent {
+    entity: Entity,
+}
 
-        let mut noise = BasicMulti::new(42);
-        noise.frequency = 2.0;
-        let noise = Arc::new(noise);
+pub fn update_lod(
+    mut planet_query: Query<&mut Planet>,
+    camera_query: Query<&Transform, With<MainCamera>>,
+    mut commands: Commands,
+    mut mesh_generator: ResMut<MeshGenerator2>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>
+) {
+    let camera_transform = camera_query.single();
+    let camera_translation = camera_transform.translation;
 
-        let terrain_faces: [TerrainQuadTreeChild; 6] = [
-            TerrainQuadTree::root(Face::Top, radius, scale, noise.clone()).into(),
-            TerrainQuadTree::root(Face::Bottom, radius, scale, noise.clone()).into(),
-            TerrainQuadTree::root(Face::Left, radius, scale, noise.clone()).into(),
-            TerrainQuadTree::root(Face::Right, radius, scale, noise.clone()).into(),
-            TerrainQuadTree::root(Face::Front, radius, scale, noise.clone()).into(),
-            TerrainQuadTree::root(Face::Back, radius, scale, noise.clone()).into()
-        ];
-
-        Planet { terrain_faces, scale, noise }
+    for mut planet in planet_query.iter_mut() {
+        for mut planet_side in planet.planet_sides.iter_mut() {
+            planet_side.update(camera_translation, &mut commands, mesh_generator.as_mut(), &mut meshes, &mut materials)
+        }
     }
 }
