@@ -4,6 +4,7 @@ pub(crate) mod terrain_quad_tree;
 pub(crate) mod planet;
 pub(crate) mod mesh_generator;
 mod quad_tree;
+mod chunk;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Face {
