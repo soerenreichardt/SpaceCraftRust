@@ -1,7 +1,7 @@
-use crate::terrain::mesh_generator::MeshGenerator2;
+use crate::terrain::chunk::Chunk;
 use crate::terrain::quad_tree::{QuadTree, Quadrant, Splittable};
-use bevy::prelude::*;
 use crate::terrain::Face;
+use bevy::prelude::*;
 
 pub(crate) struct TerrainQuadTree {
     quad_tree: QuadTree<TerrainQuadTreeNode>
@@ -27,7 +27,14 @@ impl Splittable for TerrainQuadTreeNode {
         let offsets = (offsets.0 * length as f64, offsets.1 * length as f64);
         let center = Self::compute_center_for_face(&self.face, self.center, offsets);
         let scaled_center = self.face.direction_vector() + center;
-        let entity = commands.spawn_empty().id();
+        let entity = commands.spawn(Chunk {
+            parent: Some(self.entity),
+            center: scaled_center,
+            face: self.face.clone(),
+            length,
+            scale: self.scale,
+        }).id();
+
         TerrainQuadTreeNode {
             center: scaled_center, 
             face: self.face.clone(), 
@@ -48,20 +55,23 @@ impl TerrainQuadTreeNode {
     }
 }
 
+#[derive(Event)]
+pub struct RemoveTerrainChildren(pub Entity);
+
 impl QuadTree<TerrainQuadTreeNode> {
-    pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, mesh_generator: &mut MeshGenerator2, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
+    pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, event_writer: &mut EventWriter<RemoveTerrainChildren>) {
         let distance_to_camera = (camera_translation - self.node.center * self.node.scale).length();
         let threshold = 2.0f32.powf(-(self.level as f32)) * 7.0 * self.node.scale;
 
         if let Some(children) = self.children() {
             if distance_to_camera > threshold {
                 self.merge();
-                commands.entity(self.node.entity).despawn_descendants();
+                event_writer.send(RemoveTerrainChildren(self.node.entity));
                 return;
             }
 
             for child in children {
-                child.update(camera_translation, commands, mesh_generator, meshes, materials);
+                child.update(camera_translation, commands, event_writer);
             }
         } else {
             if distance_to_camera <= threshold {
@@ -72,12 +82,7 @@ impl QuadTree<TerrainQuadTreeNode> {
                 let mut entity_commands = commands.entity(self.node.entity);
                 for child in children.iter_mut() {
                     let mut node = &mut child.node;
-                    let pbr_bundle = mesh_generator.generate_mesh(node.center, node.length, node.face.clone(), node.scale, meshes, materials);
-                    entity_commands
-                        .add_child(node.entity)
-                        .commands()
-                        .entity(node.entity)
-                        .insert(pbr_bundle);
+                    entity_commands.add_child(node.entity);
                 }
             }
         }
@@ -85,8 +90,14 @@ impl QuadTree<TerrainQuadTreeNode> {
 }
 
 impl TerrainQuadTree {
-    pub fn new(depth: u8, scale: f32, face: Face, commands: &mut Commands, mesh_generator: &mut MeshGenerator2, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
-        let mut entity_commands = commands.spawn_empty();
+    pub fn new(depth: u8, scale: f32, face: Face, commands: &mut Commands) -> Self {
+        let mut entity_commands = commands.spawn(Chunk {
+            parent: None,
+            center: face.clone().direction_vector(),
+            face: face.clone(),
+            length: 2.0,
+            scale
+        });
         let root = TerrainQuadTreeNode {
             center: face.direction_vector(),
             face,
@@ -94,14 +105,12 @@ impl TerrainQuadTree {
             scale,
             entity: entity_commands.id()
         };
-        let pbr_bundle = mesh_generator.generate_mesh(root.center, root.length, root.face.clone(), root.scale, meshes, materials);
-        entity_commands.insert(pbr_bundle);
         TerrainQuadTree {
             quad_tree: QuadTree::new(depth, 0, root)
         }
     }
 
-    pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, mesh_generator: &mut MeshGenerator2, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) {
-        self.quad_tree.update(camera_translation, commands, mesh_generator, meshes, materials);
+    pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, event_writer: &mut EventWriter<RemoveTerrainChildren>) {
+        self.quad_tree.update(camera_translation, commands, event_writer);
     }
 }

@@ -1,38 +1,55 @@
+use crate::terrain::chunk::Chunk;
+use crate::terrain::terrain_quad_tree::RemoveTerrainChildren;
+use crate::terrain::Face;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 use rand::random;
-use crate::terrain::Face;
 
 pub(crate) const MESH_SIZE: usize = 16;
 const QUEUE_CAPACITY: usize = 10000;
 
+pub fn generate_chunk_meshes(
+    mut commands: Commands,
+    query: Query<(Entity, &Chunk), Added<Chunk>>,
+    mut parents_query: Query<&mut Visibility>,
+    mesh_generator: Res<MeshGenerator>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>
+) {
+    for (entity, chunk) in query.iter() {
+        let pbr_bundle = compute_mesh(chunk.center, chunk.length, chunk.face.clone(), chunk.scale, mesh_generator.indices.clone(), &mut meshes, &mut materials);
+        commands.entity(entity).insert(pbr_bundle);
+        if let Some(parent) = chunk.parent {
+            let mut visibility = parents_query.get_mut(parent).expect("Parent not found");
+            *visibility = Visibility::Hidden;
+        }
+    }
+}
+
+pub fn restore_visibility(mut commands: Commands, mut remove_children_events: EventReader<RemoveTerrainChildren>, mut query: Query<&mut Visibility>) {
+    for event in remove_children_events.read() {
+        let entity = event.0;
+        let mut visibility = query.get_mut(entity).expect("Entity not found");
+        *visibility = Visibility::Visible;
+        commands.entity(entity).despawn_descendants();
+    }
+}
+
 #[derive(Resource)]
-pub(crate) struct MeshGenerator2 {
+pub(crate) struct MeshGenerator {
     indices: Vec<u32>
 }
 
-#[derive(Debug)]
-pub(crate) enum RequestKind2 {
-    Create,
-    Remove,
-}
-
-impl Default for MeshGenerator2 {
+impl Default for MeshGenerator {
     fn default() -> Self {
         let indices = std::str::from_utf8(include_bytes!("../../resources/indices")).unwrap()
             .split(',')
             .map(|s| s.trim().parse().unwrap())
             .collect();
-        MeshGenerator2 {
+        MeshGenerator {
             indices
         }
-    }
-}
-
-impl MeshGenerator2 {
-    pub(crate) fn generate_mesh(&self, center: Vec3, length: f32, face: Face, scale: f32, meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> PbrBundle {
-        compute_mesh(center, length, face, scale, self.indices.clone(), meshes, materials)
     }
 }
 
