@@ -1,5 +1,5 @@
 use crate::camera::MainCamera;
-use crate::terrain::terrain_quad_tree::TerrainQuadTree;
+use crate::terrain::terrain_quad_tree::{RemoveTerrainChildren, TerrainQuadTree};
 use crate::terrain::Face;
 use bevy::prelude::*;
 
@@ -25,18 +25,13 @@ impl Planet {
     }
 }
 
-#[derive(Event)]
-pub struct ChunkCreateEvent {
-    entity: Entity,
-}
-
-pub fn update_lod(mut planet_query: Query<&mut Planet>, camera_query: Query<&Transform, With<MainCamera>>, mut commands: Commands) {
+pub fn update_lod(mut planet_query: Query<&mut Planet>, camera_query: Query<&Transform, With<MainCamera>>, mut commands: Commands, mut event_writer: EventWriter<RemoveTerrainChildren>) {
     let camera_transform = camera_query.single();
     let camera_translation = camera_transform.translation;
 
     for mut planet in planet_query.iter_mut() {
         for mut planet_side in planet.planet_sides.iter_mut() {
-            planet_side.update(camera_translation, &mut commands)
+            planet_side.update(camera_translation, &mut commands, &mut event_writer)
         }
     }
 }

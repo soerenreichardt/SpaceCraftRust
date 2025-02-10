@@ -10,6 +10,7 @@ use crate::terrain::mesh_generator::MeshGenerator;
 use crate::terrain::mesh_generator::MESH_SIZE;
 use crate::terrain::planet::Planet;
 use crate::terrain::Face;
+use crate::terrain::terrain_quad_tree::RemoveTerrainChildren;
 
 pub(crate) mod terrain;
 pub(crate) mod camera;
@@ -23,7 +24,9 @@ impl Plugin for SpaceCraftPlugin {
             .add_systems(Startup, SpaceCraftPlugin::setup)
             .add_systems(Update, camera::update_camera_position)
             .add_systems(Update, terrain::planet::update_lod)
-            .add_systems(Update, terrain::mesh_generator::generate_chunk_meshes);
+            .add_systems(Update, terrain::mesh_generator::generate_chunk_meshes)
+            .add_systems(Update, terrain::mesh_generator::restore_visibility)
+            .add_event::<RemoveTerrainChildren>();
     }
 }
 
