@@ -4,6 +4,7 @@ use crate::terrain::Face;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
+use noise::{BasicMulti, NoiseFn, Perlin};
 use rand::random;
 
 pub(crate) const MESH_SIZE: usize = 16;
@@ -18,7 +19,7 @@ pub fn generate_chunk_meshes(
     mut materials: ResMut<Assets<StandardMaterial>>
 ) {
     for (entity, chunk) in query.iter() {
-        let pbr_bundle = compute_mesh(chunk.center, chunk.length, chunk.face.clone(), chunk.scale, mesh_generator.indices.clone(), &mut meshes, &mut materials);
+        let pbr_bundle = compute_mesh(chunk.center, chunk.length, chunk.face.clone(), chunk.scale, mesh_generator.indices.clone(), &mesh_generator.noise, &mut meshes, &mut materials);
         commands.entity(entity).insert(pbr_bundle);
         if let Some(parent) = chunk.parent {
             let mut visibility = parents_query.get_mut(parent).expect("Parent not found");
@@ -38,7 +39,8 @@ pub fn restore_visibility(mut commands: Commands, mut remove_children_events: Ev
 
 #[derive(Resource)]
 pub(crate) struct MeshGenerator {
-    indices: Vec<u32>
+    indices: Vec<u32>,
+    noise: BasicMulti<Perlin>
 }
 
 impl Default for MeshGenerator {
@@ -47,8 +49,10 @@ impl Default for MeshGenerator {
             .split(',')
             .map(|s| s.trim().parse().unwrap())
             .collect();
+        let noise = BasicMulti::new(0);
         MeshGenerator {
-            indices
+            indices,
+            noise
         }
     }
 }
@@ -59,6 +63,7 @@ pub(crate) fn compute_mesh(
     face: Face,
     scale: f32,
     indices: Vec<u32>,
+    noise: &BasicMulti<Perlin>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> PbrBundle {
@@ -72,7 +77,8 @@ pub(crate) fn compute_mesh(
     for y in 0..MESH_SIZE + 1 {
         for x in 0..MESH_SIZE + 1 {
             let vertex = axis_a * (x as f32 * step_size) + axis_b * (y as f32 * step_size) - offset_a - offset_b + center;
-            let vertex = vertex.normalize() * scale;
+            let height = noise.get([vertex.x as f64, vertex.y as f64, vertex.z as f64]) as f32;
+            let vertex = vertex.normalize() * scale + (height * scale * 0.1);
             vertices.push(vertex.clone().into());
         }
     }

@@ -60,7 +60,8 @@ pub struct RemoveTerrainChildren(pub Entity);
 
 impl QuadTree<TerrainQuadTreeNode> {
     pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, event_writer: &mut EventWriter<RemoveTerrainChildren>) {
-        let distance_to_camera = (camera_translation - self.node.center * self.node.scale).length();
+        // TODO: normalize center on center computation
+        let distance_to_camera = (camera_translation - self.node.center.normalize() * self.node.scale).length();
         let threshold = 2.0f32.powf(-(self.level as f32)) * 7.0 * self.node.scale;
 
         if let Some(children) = self.children() {
