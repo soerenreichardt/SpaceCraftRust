@@ -26,7 +26,7 @@ impl Planet {
 }
 
 pub fn update_lod(mut planet_query: Query<&mut Planet>, camera_query: Query<&Transform, With<MainCamera>>, mut commands: Commands, mut event_writer: EventWriter<RemoveTerrainChildren>) {
-    let camera_transform = camera_query.single();
+    let camera_transform = camera_query.single().unwrap();
     let camera_translation = camera_transform.translation;
 
     for mut planet in planet_query.iter_mut() {

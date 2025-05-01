@@ -32,7 +32,7 @@ pub fn restore_visibility(mut commands: Commands, mut remove_children_events: Ev
         let entity = event.0;
         let mut visibility = query.get_mut(entity).expect("Entity not found");
         *visibility = Visibility::Visible;
-        commands.entity(entity).despawn_descendants();
+        commands.entity(entity).despawn_related::<Children>();
     }
 }
 
@@ -61,7 +61,7 @@ pub(crate) fn compute_mesh(
     indices: Vec<u32>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
-) -> PbrBundle {
+) -> impl Bundle {
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
     let step_size = length / MESH_SIZE as f32;
     let offset = length / 2.0;
@@ -82,15 +82,14 @@ pub(crate) fn compute_mesh(
     mesh.duplicate_vertices();
     mesh.compute_flat_normals();
 
-    PbrBundle {
-        mesh: meshes.add(mesh),
-        material: materials.add(StandardMaterial {
+    (
+        Mesh3d(meshes.add(mesh)),
+        MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::linear_rgb(random::<f32>(), random::<f32>(), random::<f32>()),
             ..default()
-        }),
-        visibility: Visibility::Visible,
-        ..default()
-    }
+        })),
+        Visibility::Visible
+    )
 }
 
 #[inline(always)]

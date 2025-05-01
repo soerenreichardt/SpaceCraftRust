@@ -1,16 +1,15 @@
 use bevy::app::{App, Plugin, Startup, Update};
-use bevy::hierarchy::BuildChildren;
 use bevy::math::Vec3;
-use bevy::pbr::DirectionalLightBundle;
-use bevy::prelude::{Camera3dBundle, Commands, IntoSystemConfigs, PerspectiveProjection, Transform};
+use bevy::pbr::{DirectionalLight};
+use bevy::prelude::{Camera3d, Commands, PerspectiveProjection, Projection, Transform};
 use bevy::utils::default;
 
 use crate::camera::MainCamera;
 use crate::terrain::mesh_generator::MeshGenerator;
 use crate::terrain::mesh_generator::MESH_SIZE;
 use crate::terrain::planet::Planet;
-use crate::terrain::Face;
 use crate::terrain::terrain_quad_tree::RemoveTerrainChildren;
+use crate::terrain::Face;
 
 pub(crate) mod terrain;
 pub(crate) mod camera;
@@ -35,19 +34,17 @@ impl SpaceCraftPlugin {
         let radius = 10;
         let scale = 2.0f32.powf(radius as f32 - 1.0) * MESH_SIZE as f32;
         commands.spawn((
-            Camera3dBundle {
-                transform: Transform::from_translation(Face::Back.direction_vector() * scale + 20.0).looking_at(Vec3::default(), Vec3::Y),
-                projection: PerspectiveProjection { ..default() }.into(),
-                ..default()
-            },
+            Camera3d { ..default() },
+            Transform::from_translation(Face::Back.direction_vector() * scale + 20.0).looking_at(Vec3::default(), Vec3::Y),
+            Projection::Perspective(PerspectiveProjection { ..default() }.into()),
             MainCamera
         ));
 
         let planet = Planet::new(radius, scale, &mut commands);
         commands.spawn(planet);
-        commands.spawn(DirectionalLightBundle {
-            transform: Transform::from_translation(Vec3::new(15.0, 15.0, 15.0)),
-            ..default()
-        });
+        commands.spawn((
+            DirectionalLight { ..default() },
+            Transform::from_translation(Vec3::new(15.0, 15.0, 15.0)),
+        ));
     }
 }
