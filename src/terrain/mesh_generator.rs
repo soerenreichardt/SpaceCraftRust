@@ -1,10 +1,9 @@
-use crate::terrain::chunk::Chunk;
+use crate::terrain::chunk::{Chunk, ChunkInfo};
 use crate::terrain::terrain_quad_tree::RemoveTerrainChildren;
-use crate::terrain::Face;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
-use noise::{BasicMulti, NoiseFn, Perlin};
+use noise::NoiseFn;
 use rand::random;
 
 pub(crate) const MESH_SIZE: usize = 16;
@@ -19,9 +18,12 @@ pub fn generate_chunk_meshes(
     mut materials: ResMut<Assets<StandardMaterial>>
 ) {
     for (entity, chunk) in query.iter() {
-        let pbr_bundle = compute_mesh(chunk.center, chunk.length, chunk.face.clone(), chunk.scale, mesh_generator.indices.clone(), &mesh_generator.noise, &mut meshes, &mut materials);
+        let pbr_bundle = match chunk {
+            Chunk::Smooth(smooth_chunk) => compute_smooth_mesh(smooth_chunk.chunk_info.clone(), mesh_generator.indices.clone(), &mut meshes, &mut materials),
+            Chunk::Block(block_chunk) => todo!()
+        };
         commands.entity(entity).insert(pbr_bundle);
-        if let Some(parent) = chunk.parent {
+        if let Some(parent) = chunk.parent() {
             let mut visibility = parents_query.get_mut(parent).expect("Parent not found");
             *visibility = Visibility::Hidden;
         }
@@ -40,7 +42,6 @@ pub fn restore_visibility(mut commands: Commands, mut remove_children_events: Ev
 #[derive(Resource)]
 pub(crate) struct MeshGenerator {
     indices: Vec<u32>,
-    noise: BasicMulti<Perlin>
 }
 
 impl Default for MeshGenerator {
@@ -49,21 +50,32 @@ impl Default for MeshGenerator {
             .split(',')
             .map(|s| s.trim().parse().unwrap())
             .collect();
-        let noise = BasicMulti::new(0);
         MeshGenerator {
-            indices,
-            noise
+            indices
         }
     }
 }
 
-pub(crate) fn compute_mesh(
-    center: Vec3,
-    length: f32,
-    face: Face,
-    scale: f32,
+pub fn compute_chunk_plane(ChunkInfo { length, face, scale, center, .. }: ChunkInfo) -> Vec<Vec3> {
+    let step_size = length / MESH_SIZE as f32;
+    let offset = length / 2.0;
+    let (axis_a, axis_b) = face.perpendicular_vectors();
+    let (offset_a, offset_b) = (axis_a * offset, axis_b * offset);
+
+    let mut vertices: Vec<Vec3> = Vec::with_capacity((MESH_SIZE + 1) * (MESH_SIZE + 1));
+    for y in 0..MESH_SIZE + 1 {
+        for x in 0..MESH_SIZE + 1 {
+            let vertex = axis_a * (x as f32 * step_size) + axis_b * (y as f32 * step_size) - offset_a - offset_b + center;
+            let vertex = vertex.normalize() * scale;
+            vertices.push(vertex);
+        }
+    }
+    vertices
+}
+
+fn compute_smooth_mesh(
+    ChunkInfo { length, face, scale, center, noise }: ChunkInfo,
     indices: Vec<u32>,
-    noise: &BasicMulti<Perlin>,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> PbrBundle {
@@ -98,6 +110,16 @@ pub(crate) fn compute_mesh(
         ..default()
     }
 }
+// 
+// fn compute_block_mesh(
+//     ChunkInfo { length, face, scale, center, noise }: &ChunkInfo,
+//     meshes: &mut Assets<Mesh>,
+//     materials: &mut Assets<StandardMaterial>,
+// ) {
+//     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
+//     let mut indices = Vec::new();
+//     
+// }
 
 #[inline(always)]
 fn transform_vertex_for_noise(vertex: Vec3, scale: f32) -> [f64; 3] {

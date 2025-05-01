@@ -40,7 +40,7 @@ impl SpaceCraftPlugin {
                 projection: PerspectiveProjection { ..default() }.into(),
                 ..default()
             },
-            MainCamera
+            MainCamera,
         ));
 
         let planet = Planet::new(radius, scale, &mut commands);

@@ -1,46 +1,48 @@
-use crate::terrain::chunk::Chunk;
+use crate::terrain::chunk::{Chunk, ChunkInfo};
 use crate::terrain::quad_tree::{QuadTree, Quadrant, Splittable};
 use crate::terrain::Face;
 use bevy::prelude::*;
+use noise::{BasicMulti, Perlin};
 
 pub(crate) struct TerrainQuadTree {
     quad_tree: QuadTree<TerrainQuadTreeNode>
 }
 
 pub(crate) struct TerrainQuadTreeNode {
-    pub(crate) center: Vec3,
-    pub(crate) face: Face,
-    pub(crate) length: f32,
-    pub(crate) scale: f32,
+    pub(crate) chunk_info: ChunkInfo,
     pub(crate) entity: Entity,
+    pub(crate) block_level: u8
 }
 
 impl Splittable for TerrainQuadTreeNode {
-    fn split(&self, quadrant: Quadrant, _level: u8, commands: &mut Commands) -> Self {
+    fn split(&self, quadrant: Quadrant, level: u8, commands: &mut Commands) -> Self {
         let offsets: (f64, f64) = match quadrant {
             Quadrant::TopLeft => (-0.5, 0.5),
             Quadrant::TopRight => (0.5, 0.5),
             Quadrant::BottomLeft => (-0.5, -0.5),
             Quadrant::BottomRight => (0.5, -0.5)
         };
-        let length = self.length / 2.0;
+        let length = self.chunk_info.length / 2.0;
         let offsets = (offsets.0 * length as f64, offsets.1 * length as f64);
-        let center = Self::compute_center_for_face(&self.face, self.center, offsets);
-        let scaled_center = self.face.direction_vector() + center;
-        let entity = commands.spawn(Chunk {
-            parent: Some(self.entity),
-            center: scaled_center,
-            face: self.face.clone(),
+        let face = &self.chunk_info.face;
+        let center = Self::compute_center_for_face(face, self.chunk_info.center, offsets);
+        let scaled_center = face.direction_vector() + center;
+        
+        let chunk_info = ChunkInfo {
             length,
-            scale: self.scale,
-        }).id();
+            center: scaled_center,
+            face: face.clone(),
+            scale: self.chunk_info.scale,
+            noise: self.chunk_info.noise.clone()
+        };
+        
+        let chunk = Chunk::generate(false, Some(self.entity), chunk_info.clone());
+        let entity = commands.spawn(chunk).id();
 
         TerrainQuadTreeNode {
-            center: scaled_center, 
-            face: self.face.clone(), 
-            length,
-            scale: self.scale,
-            entity
+            chunk_info,
+            entity,
+            block_level: self.block_level
         }
     }
 }
@@ -61,8 +63,8 @@ pub struct RemoveTerrainChildren(pub Entity);
 impl QuadTree<TerrainQuadTreeNode> {
     pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, event_writer: &mut EventWriter<RemoveTerrainChildren>) {
         // TODO: normalize center on center computation
-        let distance_to_camera = (camera_translation - self.node.center.normalize() * self.node.scale).length();
-        let threshold = 2.0f32.powf(-(self.level as f32)) * 7.0 * self.node.scale;
+        let distance_to_camera = (camera_translation - self.node.chunk_info.center.normalize() * self.node.chunk_info.scale).length();
+        let threshold = 2.0f32.powf(-(self.level as f32)) * 7.0 * self.node.chunk_info.scale;
 
         if let Some(children) = self.children() {
             if distance_to_camera > threshold {
@@ -91,20 +93,20 @@ impl QuadTree<TerrainQuadTreeNode> {
 }
 
 impl TerrainQuadTree {
-    pub fn new(depth: u8, scale: f32, face: Face, commands: &mut Commands) -> Self {
-        let mut entity_commands = commands.spawn(Chunk {
-            parent: None,
+    pub fn new(depth: u8, scale: f32, face: Face, commands: &mut Commands, noise: &BasicMulti<Perlin>,) -> Self {
+        let chunk_info = ChunkInfo {
             center: face.clone().direction_vector(),
             face: face.clone(),
             length: 2.0,
-            scale
-        });
-        let root = TerrainQuadTreeNode {
-            center: face.direction_vector(),
-            face,
-            length: 2.0,
             scale,
-            entity: entity_commands.id()
+            noise: noise.clone(),
+        };
+        let chunk = Chunk::generate(false, None, chunk_info.clone());
+        let mut entity_commands = commands.spawn(chunk);
+        let root = TerrainQuadTreeNode {
+            chunk_info,
+            entity: entity_commands.id(),
+            block_level: depth
         };
         TerrainQuadTree {
             quad_tree: QuadTree::new(depth, 0, root)

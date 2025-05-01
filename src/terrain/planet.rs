@@ -2,6 +2,7 @@ use crate::camera::MainCamera;
 use crate::terrain::terrain_quad_tree::{RemoveTerrainChildren, TerrainQuadTree};
 use crate::terrain::Face;
 use bevy::prelude::*;
+use noise::BasicMulti;
 
 type PlanetSide = TerrainQuadTree;
 
@@ -12,14 +13,15 @@ pub(crate) struct Planet {
 
 impl Planet {
     pub(crate) fn new(size: u8, scale: f32, commands: &mut Commands) -> Self {
+        let noise = BasicMulti::new(0);
         Planet {
             planet_sides: [
-                PlanetSide::new(size, scale, Face::Back, commands),
-                PlanetSide::new(size, scale, Face::Front, commands),
-                PlanetSide::new(size, scale, Face::Left, commands),
-                PlanetSide::new(size, scale, Face::Right, commands),
-                PlanetSide::new(size, scale, Face::Top, commands),
-                PlanetSide::new(size, scale, Face::Bottom, commands),
+                PlanetSide::new(size, scale, Face::Back, commands, &noise),
+                PlanetSide::new(size, scale, Face::Front, commands, &noise),
+                PlanetSide::new(size, scale, Face::Left, commands, &noise),
+                PlanetSide::new(size, scale, Face::Right, commands, &noise),
+                PlanetSide::new(size, scale, Face::Top, commands, &noise),
+                PlanetSide::new(size, scale, Face::Bottom, commands, &noise),
             ]
         }
     }
