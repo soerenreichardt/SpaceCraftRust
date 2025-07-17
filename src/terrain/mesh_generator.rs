@@ -1,10 +1,11 @@
+use bevy::pbr::wireframe::Wireframe;
 use crate::terrain::chunk::Chunk;
-use crate::terrain::terrain_quad_tree::RemoveTerrainChildren;
 use crate::terrain::Face;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 use rand::random;
+use crate::terrain::terrain_octree::RemoveTerrainChildren;
 
 pub(crate) const MESH_SIZE: usize = 16;
 const QUEUE_CAPACITY: usize = 10000;
@@ -13,13 +14,29 @@ pub fn generate_chunk_meshes(
     mut commands: Commands,
     query: Query<(Entity, &Chunk), Added<Chunk>>,
     mut parents_query: Query<&mut Visibility>,
-    mesh_generator: Res<MeshGenerator>,
+    // mesh_generator: Res<MeshGenerator>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>
 ) {
     for (entity, chunk) in query.iter() {
-        let pbr_bundle = compute_mesh(chunk.center, chunk.length, chunk.face.clone(), chunk.scale, mesh_generator.indices.clone(), &mut meshes, &mut materials);
-        commands.entity(entity).insert(pbr_bundle);
+        // let pbr_bundle = compute_mesh(chunk.center, chunk.length, chunk.face.clone(), chunk.scale, mesh_generator.indices.clone(), &mut meshes, &mut materials);
+        // commands.entity(entity).insert(pbr_bundle);
+
+        let length = chunk.length * chunk.scale;
+        let cube_mesh = meshes.add(Cuboid::from_length(length));
+        // let sphere_mesh = meshes.add(Sphere::new(10.0));
+        let material = materials.add(StandardMaterial {
+            base_color: Color::linear_rgb(random::<f32>(), random::<f32>(), random::<f32>()),
+            ..default()
+        });
+
+        let mut entity_commands = commands.entity(entity);
+        entity_commands.insert((
+            Mesh3d(cube_mesh),
+            MeshMaterial3d(material.clone()),
+            Visibility::Visible
+        ));
+
         if let Some(parent) = chunk.parent {
             let mut visibility = parents_query.get_mut(parent).expect("Parent not found");
             *visibility = Visibility::Hidden;

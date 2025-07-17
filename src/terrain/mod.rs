@@ -1,10 +1,13 @@
 use bevy::prelude::Vec3;
 
-pub(crate) mod terrain_quad_tree;
+pub(crate) mod terrain_octree;
 pub(crate) mod planet;
-pub(crate) mod mesh_generator;
-mod quad_tree;
+mod octree;
 mod chunk;
+mod marching_cubes;
+pub(crate) mod mesh_generator;
+
+pub const CHUNK_SIZE: usize = 32;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Face {

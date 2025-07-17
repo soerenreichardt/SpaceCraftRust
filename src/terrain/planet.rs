@@ -1,9 +1,9 @@
 use crate::camera::MainCamera;
-use crate::terrain::terrain_quad_tree::{RemoveTerrainChildren, TerrainQuadTree};
 use crate::terrain::Face;
 use bevy::prelude::*;
+use crate::terrain::terrain_octree::{RemoveTerrainChildren, TerrainOctree};
 
-type PlanetSide = TerrainQuadTree;
+type PlanetSide = TerrainOctree;
 
 #[derive(Component)]
 pub(crate) struct Planet {
@@ -30,7 +30,7 @@ pub fn update_lod(mut planet_query: Query<&mut Planet>, camera_query: Query<&Tra
     let camera_translation = camera_transform.translation;
 
     for mut planet in planet_query.iter_mut() {
-        for mut planet_side in planet.planet_sides.iter_mut() {
+        for planet_side in planet.planet_sides.iter_mut() {
             planet_side.update(camera_translation, &mut commands, &mut event_writer)
         }
     }

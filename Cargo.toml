@@ -14,8 +14,6 @@ opt-level = 3
 
 [dependencies]
 bevy = { version = "0.16.0", features = ["dynamic_linking"] }
-concurrent-queue = { version = "2.3.0" }
-once_cell = { version = "1.18.0" }
 rand = { version = "0.9.1" }
-noise = "0.9.0"
+noiz = "0.2.0" 
 bevy-inspector-egui = "0.31.0"
