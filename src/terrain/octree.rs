@@ -88,4 +88,25 @@ impl Octant {
             Octant::BottomRightBack => Vec3::new(0.5, -0.5, -0.5),
         }
     }
+
+    pub fn points_towards_top(&self) -> bool {
+        match self {
+            Octant::TopLeftFront | Octant::TopLeftBack | Octant::TopRightFront | Octant::TopRightBack => true,
+            _ => false,
+        }
+    }
+
+    pub fn points_towards_left(&self) -> bool {
+        match self {
+            Octant::BottomLeftBack | Octant::BottomLeftFront | Octant::TopLeftBack | Octant::TopLeftFront => true,
+            _ => false,
+        }
+    }
+
+    pub fn points_towards_front(&self) -> bool {
+        match self {
+            Octant::BottomLeftFront | Octant::BottomRightFront | Octant::TopRightFront | Octant::TopLeftFront => true,
+            _ => false,
+        }
+    }
 }

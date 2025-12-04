@@ -4,8 +4,8 @@ pub(crate) mod terrain_octree;
 pub(crate) mod planet;
 mod octree;
 mod chunk;
-mod marching_cubes;
-pub(crate) mod mesh_generator;
+mod block;
+pub(crate) mod mesh;
 
 pub const CHUNK_SIZE: usize = 32;
 
