@@ -1,6 +1,7 @@
 use crate::terrain::{Face, CHUNK_SIZE};
 use bevy::prelude::*;
 use crate::terrain::block::BlockType;
+use crate::terrain::terrain_octree::NodeRange;
 
 #[derive(Component)]
 pub struct Chunk {
@@ -10,6 +11,7 @@ pub struct Chunk {
     pub(crate) length: f32,
     pub(crate) scale: f32,
     pub(crate) blocks: Blocks,
+    pub(crate) range: NodeRange,
 }
 
 pub struct Blocks {

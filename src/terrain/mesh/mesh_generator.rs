@@ -18,10 +18,10 @@ pub fn generate_chunk_meshes(
     mut materials: ResMut<Assets<StandardMaterial>>
 ) {
     for (entity, chunk) in query.iter() {
-        // if !chunk.height_range.contains(0) {
-        //     commands.entity(entity).insert(Visibility::Visible);
-        //     continue;
-        // }
+        if chunk.range.z(chunk.face.clone()).0 != 0 {
+            commands.entity(entity).insert(Visibility::Visible);
+            continue;
+        }
         let render_bundle = mesh_generator.compute_mesh(chunk, &mut meshes, &mut materials);
         commands.entity(entity).insert(render_bundle);
 
