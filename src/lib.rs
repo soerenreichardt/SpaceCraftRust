@@ -1,4 +1,5 @@
 use bevy::app::{App, Plugin, Startup, Update};
+use bevy::ecs::schedule::IntoScheduleConfigs;
 use bevy::math::Vec3;
 use bevy::pbr::DirectionalLight;
 use bevy::prelude::{Camera3d, Commands, PerspectiveProjection, Projection, Transform};
@@ -20,10 +21,12 @@ impl Plugin for SpaceCraftPlugin {
     fn build(&self, app: &mut App) {
         app
             .add_systems(Startup, SpaceCraftPlugin::setup)
-            .add_systems(Update, camera::update_camera_position)
-            .add_systems(Update, terrain::planet::update_lod)
-            .add_systems(Update, mesh_generator::generate_chunk_meshes)
-            .add_systems(Update, mesh_generator::restore_visibility)
+            .add_systems(Update, (
+                camera::update_camera_position,
+                terrain::planet::update_lod,
+                mesh_generator::generate_chunk_meshes,
+                mesh_generator::restore_visibility,
+            ).chain())
             .insert_resource(MeshGenerator::default())
             .add_event::<RemoveTerrainChildren>();
     }

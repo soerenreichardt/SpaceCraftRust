@@ -45,6 +45,7 @@ impl Splittable for TerrainOctreeNode {
                 range: range.clone(),
             },
             Transform::from_translation(relative_center),
+            Visibility::default(),
         )).id();
 
         commands.entity(self.entity).add_child(entity);
@@ -111,6 +112,7 @@ impl TerrainOctree {
                 range: range.clone(),
             },
             Transform::from_translation(center),
+            Visibility::default(),
         ));
         let root = TerrainOctreeNode {
             center,
