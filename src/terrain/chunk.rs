@@ -10,7 +10,7 @@ pub struct Chunk {
     pub(crate) face: Face,
     pub(crate) length: f32,
     pub(crate) scale: f32,
-    pub(crate) blocks: Blocks,
+    pub(crate) blocks: Option<Blocks>,
     pub(crate) range: NodeRange,
 }
 
