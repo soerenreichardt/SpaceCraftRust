@@ -159,7 +159,7 @@ impl NodeRange {
         }
     }
 
-    fn from_scale(scale: f32) -> Self {
+    pub(crate) fn from_scale(scale: f32) -> Self {
         let max = scale as u32;
         NodeRange {
             x: DimensionRange(0, max),
@@ -168,7 +168,7 @@ impl NodeRange {
         }
     }
 
-    fn split(&self, octant: Octant) -> Self {
+    pub(crate) fn split(&self, octant: Octant) -> Self {
         match octant {
             Octant::TopLeftFront => NodeRange {
                 x: self.x.lower_half(),
