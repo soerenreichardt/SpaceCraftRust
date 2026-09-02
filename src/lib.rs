@@ -34,11 +34,11 @@ impl Plugin for SpaceCraftPlugin {
 
 impl SpaceCraftPlugin {
     fn setup(mut commands: Commands) {
-        let radius = 3;
+        let radius = 4;
         let scale = 2.0f32.powf(radius as f32 - 1.0) * CHUNK_SIZE as f32;
         commands.spawn((
             Camera3d { ..default() },
-            Transform::from_translation(Face::Back.direction_vector() * scale + 20.0).looking_at(Vec3::default(), Vec3::Y),
+            Transform::from_translation(Face::Front.direction_vector() * scale + 20.0).looking_at(Vec3::default(), Vec3::Y),
             Projection::Perspective(PerspectiveProjection { ..default() }.into()),
             MainCamera
         ));
