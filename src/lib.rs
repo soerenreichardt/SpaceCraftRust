@@ -43,8 +43,12 @@ impl SpaceCraftPlugin {
             MainCamera
         ));
 
-        let planet = Planet::new(radius, scale, &mut commands);
-        commands.spawn(planet);
+        // Spawn the planet entity first so every chunk can reference it;
+        // the seed is the planet's terrain signature (distinct per planet
+        // once there are several).
+        let planet_entity = commands.spawn_empty().id();
+        let planet = Planet::new(planet_entity, radius, scale, 0, &mut commands);
+        commands.entity(planet_entity).insert(planet);
         commands.spawn((
             DirectionalLight { ..default() },
             Transform::from_translation(Vec3::new(15.0, 15.0, 15.0)),

@@ -1,6 +1,7 @@
 use crate::terrain::chunk::Chunk;
+use crate::terrain::generate::FaceGrid;
 use crate::terrain::mesh::base_plane::CurvedBasePlane;
-use crate::terrain::terrain_octree::RemoveTerrainChildren;
+use crate::terrain::terrain_octree::{DimensionRange, RemoveTerrainChildren};
 use bevy::pbr::wireframe::Wireframe;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
@@ -17,17 +18,10 @@ pub fn generate_chunk_meshes(
     mut materials: ResMut<Assets<StandardMaterial>>
 ) {
     for (entity, chunk) in query.iter() {
-        // Mesh only the radial slice adjacent to the surface plane (gz = scale/2,
-        // where the sphere crosses the face volume). The old `z.0 == 0` gate picked
-        // the slice at the far end of the cube — the planet-core side on the positive
-        // faces, outer space on the negative ones — whose sphere projection lands on
-        // the cube's edge zones rather than the surface patch it renders at, so those
-        // faces refined against the wrong reference point. The root (full range) stays
-        // meshed so an unrefined face still renders.
         let scale = chunk.scale as u32;
         let radial = chunk.range.z(chunk.face.clone());
-        let is_root = radial.0 == 0 && radial.1 == scale;
-        let is_surface_slice = radial.0 == scale / 2;
+        let is_root = radial.0 == 0 && radial.1 == 2 * scale;
+        let is_surface_slice = radial.0 == scale;
         if !(is_root || is_surface_slice) {
             commands.entity(entity).insert(Visibility::Visible);
             continue;

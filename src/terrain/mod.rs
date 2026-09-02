@@ -2,6 +2,7 @@ use bevy::prelude::Vec3;
 
 pub(crate) mod terrain_octree;
 pub(crate) mod planet;
+pub(crate) mod generate;
 mod octree;
 mod chunk;
 mod block;

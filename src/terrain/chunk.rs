@@ -6,6 +6,10 @@ use crate::terrain::terrain_octree::NodeRange;
 #[derive(Component)]
 pub struct Chunk {
     pub(crate) parent: Option<Entity>,
+    /// The planet this chunk belongs to — generation systems resolve the
+    /// per-planet `TerrainGenerator` (the planet's noise signature) through
+    /// this reference.
+    pub(crate) planet: Entity,
     pub(crate) center: Vec3,
     pub(crate) face: Face,
     pub(crate) length: f32,

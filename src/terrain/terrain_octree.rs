@@ -12,6 +12,9 @@ pub(crate) struct TerrainOctreeNode {
     face: Face,
     length: f32,
     scale: f32,
+    /// The owning planet — stamped onto every spawned chunk so generation
+    /// systems can resolve the per-planet `TerrainGenerator`.
+    planet: Entity,
     entity: Entity,
     range: NodeRange,
 }
@@ -37,6 +40,7 @@ impl Splittable for TerrainOctreeNode {
         let entity = commands.spawn((
             Chunk {
                 parent: Some(self.entity),
+                planet: self.planet,
                 center,
                 face: self.face.clone(),
                 length,
@@ -55,6 +59,7 @@ impl Splittable for TerrainOctreeNode {
             face: self.face.clone(),
             length,
             scale: self.scale,
+            planet: self.planet,
             entity,
             range,
         }
@@ -97,13 +102,14 @@ impl Octree<TerrainOctreeNode> {
 }
 
 impl TerrainOctree {
-    pub fn new(depth: u8, scale: f32, face: Face, commands: &mut Commands) -> Self {
+    pub fn new(depth: u8, scale: f32, face: Face, planet: Entity, commands: &mut Commands) -> Self {
         let length = 2.0 * scale;
         let center = face.direction_vector() * scale;
-        let range = NodeRange::from_scale(scale);
+        let range = NodeRange::from_scale(length);
         let entity_commands = commands.spawn((
             Chunk {
                 parent: None,
+                planet,
                 center,
                 face: face.clone(),
                 length,
@@ -119,6 +125,7 @@ impl TerrainOctree {
             face,
             length,
             scale,
+            planet,
             entity: entity_commands.id(),
             range,
         };
