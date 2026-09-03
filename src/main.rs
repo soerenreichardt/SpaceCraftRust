@@ -8,6 +8,6 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .add_plugins(SpaceCraftPlugin)
         .add_plugins((FrameTimeDiagnosticsPlugin::default(), LogDiagnosticsPlugin::default()))
-        .add_plugins(WireframePlugin::default())
+        // .add_plugins(WireframePlugin::default())
         .run();
 }

@@ -25,7 +25,9 @@ impl Plugin for SpaceCraftPlugin {
                 camera::update_camera_position,
                 terrain::planet::update_lod,
                 mesh_generator::generate_chunk_meshes,
+                mesh_generator::poll_chunk_tasks,
                 mesh_generator::restore_visibility,
+                mesh_generator::update_chunk_visibility,
             ).chain())
             .insert_resource(MeshGenerator::default())
             .add_event::<RemoveTerrainChildren>();

@@ -1,5 +1,6 @@
 use crate::terrain::block::BlockType;
 use crate::terrain::chunk::{Blocks, Chunk};
+use crate::terrain::mesh::marching_cubes::OccupancyView;
 use crate::terrain::terrain_octree::DimensionRange;
 use crate::terrain::{Face, CHUNK_SIZE};
 use bevy::math::DVec3;
@@ -21,6 +22,7 @@ use noiz::prelude::{
 /// `Face::perpendicular_vectors()`, whose signs disagree with this frame on
 /// four of the six faces (which would mirror terrain across chunk seams —
 /// see the plan's Finding 1).
+#[derive(Clone)]
 pub(crate) struct FaceGrid {
     scale: f64,
     /// `n * scale` — the root cube's face-plane center.
@@ -142,6 +144,7 @@ const SHELL_MARGIN: f64 = 1.1;
 /// Per-planet terrain signature: a seeded fbm, sea level, and displacement
 /// amplitude. Owned by the `Planet` component — one per planet, since every
 /// planet has its own signature.
+#[derive(Clone)]
 pub(crate) struct TerrainGenerator {
     noise: Noise<TerrainFbm>,
     /// Sea level: the radius of the undisplaced sphere.
@@ -224,6 +227,25 @@ impl TerrainGenerator {
         self.density(p) > 0.0
     }
 
+    /// Surface normal at a near-surface point, from the density gradient
+    /// (central differences, step ≈ ⅛ of the finest noise feature):
+    /// points out of the solid, toward decreasing density. Unlike a radial
+    /// normal — which shades everything as a perfect sphere — this
+    /// captures slopes, ridges, and cave ceilings, so the terrain shades
+    /// with its actual relief. Falls back to the radial direction if the
+    /// gradient vanishes.
+    pub(crate) fn surface_normal(&self, p: DVec3) -> DVec3 {
+        let h = self.sea_level / 1024.0;
+        let dx = self.density(p + DVec3::X * h) - self.density(p - DVec3::X * h);
+        let dy = self.density(p + DVec3::Y * h) - self.density(p - DVec3::Y * h);
+        let dz = self.density(p + DVec3::Z * h) - self.density(p - DVec3::Z * h);
+        let gradient = DVec3::new(dx, dy, dz);
+        if gradient.length_squared() < 1e-12 {
+            return p.normalize();
+        }
+        (-gradient).normalize()
+    }
+
     /// Whether the chunk's flat box can intersect the terrain band
     /// `[sea_level − amp·SHELL_MARGIN, sea_level + amp·SHELL_MARGIN]`.
     /// Uses the exact min/max of `|p|` over the chunk's axis-aligned box —
@@ -235,7 +257,7 @@ impl TerrainGenerator {
         matches!(self.band_class(chunk), BandClass::Band)
     }
 
-    fn band_class(&self, chunk: &Chunk) -> BandClass {
+    pub(crate) fn band_class(&self, chunk: &Chunk) -> BandClass {
         let c = chunk.center.as_dvec3();
         let h = chunk.length as f64 / 2.0;
         let band = self.amplitude * SHELL_MARGIN;
@@ -259,7 +281,7 @@ impl TerrainGenerator {
 }
 
 /// Radial classification of a chunk relative to the terrain band.
-enum BandClass {
+pub(crate) enum BandClass {
     /// Entirely outside the band — all air.
     Outside,
     /// Entirely inside the band's floor — all solid.
@@ -274,49 +296,14 @@ enum BandClass {
 /// column get `Stone` ceilings (accepted for now). Off-band chunks fill
 /// uniformly with zero noise evaluations.
 pub(crate) fn fill_blocks(generator: &TerrainGenerator, grid: &FaceGrid, chunk: &Chunk) -> Blocks {
+    use crate::terrain::mesh::marching_cubes::blocks_from_view;
     match generator.band_class(chunk) {
         BandClass::Outside => Blocks::default(),
         BandClass::Inside => Blocks::stone(),
+        // The band arm shares one sampling pass with the mesher: the
+        // occupancy view's samples ARE the block solidities.
         BandClass::Band => {
-            let face = chunk.face.clone();
-            let x_range = chunk.range.x(face.clone());
-            let y_range = chunk.range.y(face.clone());
-            let z_range = chunk.range.z(face);
-            let step = |r: &DimensionRange| (r.1 - r.0) as f64 / CHUNK_SIZE as f64;
-            let (step_x, step_y, step_z) = (step(x_range), step(y_range), step(z_range));
-            let (x0, y0, z0) = (x_range.0 as f64, y_range.0 as f64, z_range.0 as f64);
-
-            let mut blocks = [BlockType::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
-            let outward = grid.gz_points_outward();
-            for i in 0..CHUNK_SIZE {
-                let gx = x0 + i as f64 * step_x;
-                for j in 0..CHUNK_SIZE {
-                    let gy = y0 + j as f64 * step_y;
-                    let mut solids = [false; CHUNK_SIZE];
-                    for (k, solid) in solids.iter_mut().enumerate() {
-                        let gz = z0 + k as f64 * step_z;
-                        *solid = generator.is_solid_at(grid, gx, gy, gz);
-                    }
-                    // The outermost solid block is the surface block.
-                    let surface_k = if outward {
-                        solids.iter().rposition(|&s| s)
-                    } else {
-                        solids.iter().position(|&s| s)
-                    };
-                    if let Some(surface_k) = surface_k {
-                        for k in 0..CHUNK_SIZE {
-                            if solids[k] {
-                                blocks[CHUNK_SIZE * (CHUNK_SIZE * k + j) + i] = if k == surface_k {
-                                    BlockType::Grass
-                                } else {
-                                    BlockType::Stone
-                                };
-                            }
-                        }
-                    }
-                }
-            }
-            Blocks::from_blocks(blocks)
+            blocks_from_view(&OccupancyView::build(generator, grid, chunk), grid)
         }
     }
 }

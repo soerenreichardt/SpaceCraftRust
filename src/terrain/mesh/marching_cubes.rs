@@ -14,10 +14,12 @@
 //!   `-1`-terminated — the canonical resolution of the ambiguous cases,
 //!   used identically everywhere. Never case-adjust per chunk.
 
-use crate::terrain::chunk::Chunk;
-use crate::terrain::generate::{face_owns_cell, FaceGrid, TerrainGenerator};
+use crate::terrain::block::BlockType;
+use crate::terrain::chunk::{Blocks, Chunk};
+use crate::terrain::generate::{face_owns_cell, BandClass, FaceGrid, TerrainGenerator};
 use crate::terrain::terrain_octree::DimensionRange;
 use crate::terrain::CHUNK_SIZE;
+use bevy::math::DVec3;
 
 /// Sample-grid width: a chunk's 32³ blocks plus the +1 positive ring
 /// (index 32 = the neighbor's block 0).
@@ -77,8 +79,7 @@ impl OccupancyView {
     }
 }
 
-/// Reusable marching-cubes output for one chunk. `clear()` between chunks;
-/// held in the `MeshGenerator` resource.
+/// Marching-cubes output for one chunk — task-local buffers.
 #[derive(Default)]
 pub(crate) struct McOutput {
     /// Chunk-local vertex positions — flat crossing positions, center
@@ -87,11 +88,102 @@ pub(crate) struct McOutput {
     pub(crate) indices: Vec<u32>,
 }
 
-impl McOutput {
-    pub(crate) fn clear(&mut self) {
-        self.positions.clear();
-        self.indices.clear();
+/// A chunk's full generation payload — the output of one off-thread task.
+/// Plain data, `Send`, produced by `generate_chunk_payload` and applied on
+/// the main thread by the poll system.
+pub(crate) struct GeneratedChunk {
+    pub(crate) blocks: Blocks,
+    /// Chunk-local MC vertex positions (flat crossing positions).
+    pub(crate) positions: Vec<[f32; 3]>,
+    /// Gradient normals (`−∇density` at the vertex) — the true surface
+    /// orientation, so lighting shows the actual relief; computed
+    /// off-thread so applying a result costs no `compute_normals`.
+    pub(crate) normals: Vec<[f32; 3]>,
+    pub(crate) indices: Vec<u32>,
+}
+
+/// Everything a chunk's generation needs, in one pass over one set of
+/// samples: band classification, block fill, and the MC mesh all read the
+/// same 33³ occupancy view (the fill's solidities ARE the view's samples —
+/// the mesher and the data cannot disagree). Pure and self-contained —
+/// safe to run on a task pool thread.
+pub(crate) fn generate_chunk_payload(
+    generator: &TerrainGenerator,
+    grid: &FaceGrid,
+    chunk: &Chunk,
+) -> GeneratedChunk {
+    match generator.band_class(chunk) {
+        BandClass::Outside => GeneratedChunk {
+            blocks: Blocks::default(),
+            positions: Vec::new(),
+            normals: Vec::new(),
+            indices: Vec::new(),
+        },
+        BandClass::Inside => GeneratedChunk {
+            blocks: Blocks::stone(),
+            positions: Vec::new(),
+            normals: Vec::new(),
+            indices: Vec::new(),
+        },
+        BandClass::Band => {
+            let view = OccupancyView::build(generator, grid, chunk);
+            let blocks = blocks_from_view(&view, grid);
+            let mut out = McOutput::default();
+            marching_cubes(&view, grid, chunk, &mut out);
+            let center = chunk.center.as_dvec3();
+            let normals = out
+                .positions
+                .iter()
+                .map(|p| {
+                    let world =
+                        DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64) + center;
+                    let n = generator.surface_normal(world);
+                    [n.x as f32, n.y as f32, n.z as f32]
+                })
+                .collect();
+            GeneratedChunk {
+                blocks,
+                positions: out.positions,
+                normals,
+                indices: out.indices,
+            }
+        }
     }
+}
+
+/// Fills a chunk's `Blocks` from an existing occupancy view: per (i, j)
+/// column, the outermost solid block gets `Grass`, solids below it `Stone`,
+/// air stays `Air` (cave pockets get `Stone` ceilings). The view's samples
+/// (chunk blocks + the +1 ring) are the solidities — no second sampling
+/// pass.
+pub(crate) fn blocks_from_view(view: &OccupancyView, grid: &FaceGrid) -> Blocks {
+    let outward = grid.gz_points_outward();
+    let mut blocks = [BlockType::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
+    for i in 0..CHUNK_SIZE {
+        for j in 0..CHUNK_SIZE {
+            let mut solids = [false; CHUNK_SIZE];
+            for (k, solid) in solids.iter_mut().enumerate() {
+                *solid = view.solid(i, j, k);
+            }
+            let surface_k = if outward {
+                solids.iter().rposition(|&s| s)
+            } else {
+                solids.iter().position(|&s| s)
+            };
+            if let Some(surface_k) = surface_k {
+                for k in 0..CHUNK_SIZE {
+                    if solids[k] {
+                        blocks[CHUNK_SIZE * (CHUNK_SIZE * k + j) + i] = if k == surface_k {
+                            BlockType::Grass
+                        } else {
+                            BlockType::Stone
+                        };
+                    }
+                }
+            }
+        }
+    }
+    Blocks::from_blocks(blocks)
 }
 
 /// Meshes a chunk's 32³ cells (min-corner ownership: every cell whose
@@ -762,5 +854,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The off-thread payload produces exactly the fill's blocks and a
+    /// non-empty mesh for a band chunk — the single-sampling guarantee
+    /// end to end.
+    #[test]
+    fn payload_matches_fill_blocks() {
+        let scale = 256.0f32;
+        let gen = TerrainGenerator::new(scale, 3);
+        let chunk = chunk_at(&Face::Front, scale, (0, 512), (0, 512), (0, 512));
+        let grid = FaceGrid::new(&chunk.face, scale);
+        let payload = generate_chunk_payload(&gen, &grid, &chunk);
+        let blocks = fill_blocks(&gen, &grid, &chunk);
+        for k in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for i in 0..CHUNK_SIZE {
+                    assert_eq!(
+                        payload.blocks.get(i, j, k),
+                        blocks.get(i, j, k),
+                        "payload/fill disagree at ({i}, {j}, {k})"
+                    );
+                }
+            }
+        }
+        assert!(!payload.indices.is_empty());
+        assert_eq!(payload.indices.len() % 3, 0);
+        assert_eq!(payload.normals.len(), payload.positions.len());
+        // Gradient normals: unit length, pointing out of the solid —
+        // toward decreasing density, which also holds on cave ceilings —
+        // and deviating from the radial direction where the terrain has
+        // relief (otherwise lighting shades the planet as a bare sphere).
+        let mut max_radial_deviation = 0.0f64;
+        for (p, n) in payload.positions.iter().zip(&payload.normals) {
+            let world = DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64)
+                + chunk.center.as_dvec3();
+            let n = DVec3::new(n[0] as f64, n[1] as f64, n[2] as f64);
+            assert!((n.length() - 1.0).abs() < 1e-3, "normal not unit: {n:?}");
+            let delta = 0.5;
+            let toward_air = gen.density(world + n * delta);
+            let toward_solid = gen.density(world - n * delta);
+            assert!(
+                toward_air < toward_solid,
+                "normal points into the solid at {world:?}"
+            );
+            max_radial_deviation =
+                max_radial_deviation.max(1.0 - n.dot(world.normalize()));
+        }
+        assert!(
+            max_radial_deviation > 0.01,
+            "normals are purely radial — the gradient is not reaching the mesh"
+        );
     }
 }

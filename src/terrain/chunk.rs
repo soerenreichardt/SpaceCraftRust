@@ -3,7 +3,7 @@ use bevy::prelude::*;
 use crate::terrain::block::BlockType;
 use crate::terrain::terrain_octree::NodeRange;
 
-#[derive(Component)]
+#[derive(Component, Clone)]
 pub struct Chunk {
     pub(crate) parent: Option<Entity>,
     /// The planet this chunk belongs to — generation systems resolve the
@@ -18,6 +18,7 @@ pub struct Chunk {
     pub(crate) range: NodeRange,
 }
 
+#[derive(Clone)]
 pub struct Blocks {
     blocks: [BlockType; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
 }
