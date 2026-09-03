@@ -10,7 +10,7 @@ pub(crate) mod mesh;
 
 pub const CHUNK_SIZE: usize = 32;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Face {
     Top,
     Bottom,

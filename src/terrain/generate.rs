@@ -89,6 +89,34 @@ impl FaceGrid {
     }
 }
 
+/// The face whose angular pyramid contains `p` — the six pyramids (origin
+/// through each face square) tile space exactly. The point's dominant world
+/// component (by absolute value) picks the axis, its sign picks the
+/// positive/negative face, and ties break by fixed axis priority (X over Y
+/// over Z) so every point resolves to exactly one face, identically from
+/// all six lattices. This is the mesh-exactly-once rule for MC cells: a
+/// cell is meshed only by the face owning its min-corner position, which
+/// dedups the wedge regions where neighboring face cubes overlap.
+pub(crate) fn owning_face(p: DVec3) -> Face {
+    let (x, y, z) = (p.x.abs(), p.y.abs(), p.z.abs());
+    if x >= y && x >= z {
+        if p.x >= 0.0 { Face::Right } else { Face::Left }
+    } else if y >= z {
+        if p.y >= 0.0 { Face::Top } else { Face::Bottom }
+    } else {
+        if p.z >= 0.0 { Face::Front } else { Face::Back }
+    }
+}
+
+/// Whether `face` owns the MC cell whose minimum corner is at this lattice
+/// point — min-corner ownership plus the pyramid rule means every world
+/// cell is meshed exactly once across the six faces; cross-face agreement
+/// on shared corners comes from the shared lattice and the point-canonical
+/// density rule.
+pub(crate) fn face_owns_cell(grid: &FaceGrid, face: &Face, gx: f64, gy: f64, gz: f64) -> bool {
+    owning_face(grid.position(gx, gy, gz)) == *face
+}
+
 /// Fractal brownian motion over 3D simplex: 6 octaves, each half the weight
 /// (`Persistence`) and twice the frequency (`lacunarity`) of the last.
 /// `Normed` collects the octaves into a weighted average, so the output
@@ -697,5 +725,71 @@ mod tests {
             gen.point_density(&front, p_front.0, p_front.1, p_front.2),
             gen.point_density(&top, p_top.0, p_top.1, p_top.2)
         );
+    }
+
+    /// Pyramid ownership: interiors resolve to their face, diagonal ties
+    /// break by the fixed axis priority X > Y > Z.
+    #[test]
+    fn pyramid_ownership_resolves_points() {
+        assert_eq!(owning_face(DVec3::new(10.0, 0.0, 200.0)), Face::Front);
+        assert_eq!(owning_face(DVec3::new(0.0, 0.0, -200.0)), Face::Back);
+        assert_eq!(owning_face(DVec3::new(200.0, 10.0, 10.0)), Face::Right);
+        assert_eq!(owning_face(DVec3::new(-200.0, 10.0, 10.0)), Face::Left);
+        assert_eq!(owning_face(DVec3::new(10.0, 200.0, 10.0)), Face::Top);
+        assert_eq!(owning_face(DVec3::new(10.0, -200.0, 10.0)), Face::Bottom);
+        // Ties: X beats Y beats Z.
+        assert_eq!(owning_face(DVec3::new(100.0, 100.0, 100.0)), Face::Right);
+        assert_eq!(owning_face(DVec3::new(-100.0, 100.0, 100.0)), Face::Left);
+        assert_eq!(owning_face(DVec3::new(0.0, 100.0, 100.0)), Face::Top);
+        assert_eq!(owning_face(DVec3::new(0.0, -100.0, 100.0)), Face::Bottom);
+        assert_eq!(owning_face(DVec3::new(0.0, 0.0, 100.0)), Face::Front);
+    }
+
+    /// Lattice coordinates of a world point in each face's frame (inverse
+    /// of `FaceGrid::position`).
+    fn lattice_coords(face: &Face, p: DVec3, s: f64) -> (f64, f64, f64) {
+        match face {
+            Face::Front => (p.x + s, p.y + s, p.z),
+            Face::Back => (p.x + s, p.y + s, p.z + 2.0 * s),
+            Face::Top => (p.x + s, p.z + s, p.y),
+            Face::Bottom => (p.x + s, p.z + s, p.y + 2.0 * s),
+            Face::Right => (p.z + s, p.y + s, p.x),
+            Face::Left => (p.z + s, p.y + s, p.x + 2.0 * s),
+        }
+    }
+
+    /// The mesh-exactly-once invariant end to end: over a sweep of sphere
+    /// directions, each world point is owned by exactly one of the six
+    /// faces — addressed through every face's own lattice.
+    #[test]
+    fn every_direction_has_exactly_one_owner() {
+        let scale = 256.0f64;
+        let grids: Vec<(Face, FaceGrid)> = [
+            Face::Front,
+            Face::Back,
+            Face::Top,
+            Face::Bottom,
+            Face::Left,
+            Face::Right,
+        ]
+        .iter()
+        .map(|f| (f.clone(), FaceGrid::new(f, scale as f32)))
+        .collect();
+
+        let golden = std::f64::consts::TAU / (1.0 + 5.0f64.sqrt());
+        for i in 0..500 {
+            let z = 1.0 - 2.0 * (i as f64 + 0.5) / 500.0;
+            let r = (1.0 - z * z).sqrt();
+            let phi = i as f64 * golden;
+            let p = DVec3::new(r * phi.cos(), r * phi.sin(), z) * scale;
+            let owners = grids
+                .iter()
+                .filter(|(face, grid)| {
+                    let (gx, gy, gz) = lattice_coords(&face, p, scale);
+                    face_owns_cell(grid, &face, gx, gy, gz)
+                })
+                .count();
+            assert_eq!(owners, 1, "point {p:?} has {owners} owners");
+        }
     }
 }
