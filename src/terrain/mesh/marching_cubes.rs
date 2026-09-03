@@ -579,52 +579,17 @@ mod tests {
     // ---- mesher tests ----
 
     use crate::terrain::chunk::Blocks;
-    use crate::terrain::generate::fill_blocks;
-    use crate::terrain::terrain_octree::NodeRange;
+    use crate::terrain::generate::{fill_blocks, test_support, TerrainGenerator};
+    use crate::terrain::Face;
     use bevy::math::DVec3;
-    use bevy::prelude::Entity;
 
-    /// A chunk around hand-chosen face-remapped lattice ranges (gx, gy, gz
-    /// windows), with raw stores, center, and length consistent with the
-    /// face's accessor mapping.
-    fn chunk_at(
-        face: &crate::terrain::Face,
-        scale: f32,
-        gx: (u32, u32),
-        gy: (u32, u32),
-        gz: (u32, u32),
-    ) -> Chunk {
-        // Raw (x, y, z) stores from the face-remapped windows, per the
-        // NodeRange accessor mapping.
-        let (xs, ys, zs) = match face {
-            crate::terrain::Face::Front | crate::terrain::Face::Back => (gx, gy, gz),
-            crate::terrain::Face::Top | crate::terrain::Face::Bottom => (gx, gz, gy),
-            crate::terrain::Face::Left | crate::terrain::Face::Right => (gz, gy, gx),
-        };
-        let grid = FaceGrid::new(face, scale);
-        let mid = |r: (u32, u32)| (r.0 + r.1) as f64 / 2.0;
-        let center = grid.position(mid(gx), mid(gy), mid(gz));
-        Chunk {
-            parent: None,
-            planet: Entity::PLACEHOLDER,
-            center: center.as_vec3(),
-            face: face.clone(),
-            length: (gx.1 - gx.0) as f32,
-            scale,
-            blocks: None,
-            range: NodeRange::from_ranges(
-                DimensionRange(xs.0, xs.1),
-                DimensionRange(ys.0, ys.1),
-                DimensionRange(zs.0, zs.1),
-            ),
-        }
-    }
+    use test_support::chunk_at;
 
     /// A small Front chunk well inside Front's pyramid: world box
     /// x,y ∈ [−64, −32], z ∈ [224, 256] — every cell is Front-owned.
     fn front_chunk() -> Chunk {
         chunk_at(
-            &crate::terrain::Face::Front,
+            &Face::Front,
             256.0,
             (192, 224),
             (192, 224),
@@ -666,7 +631,7 @@ mod tests {
         // Root-level Front chunk (step 16); one solid sample at lattice
         // (272, 272, 272) — world (16, 16, 272), inside Front's pyramid.
         let chunk = chunk_at(
-            &crate::terrain::Face::Front,
+            &Face::Front,
             256.0,
             (0, 512),
             (0, 512),
@@ -725,7 +690,7 @@ mod tests {
         // Top's lattice: world = (gx−S, gz, gy−S), so the face-remapped
         // ranges are x: world x, y: world z, z: world y (radial).
         let chunk = chunk_at(
-            &crate::terrain::Face::Top,
+            &Face::Top,
             256.0,
             (192, 224), // world x ∈ [−64, −32]
             (192, 224), // world z ∈ [−64, −32]
@@ -759,7 +724,7 @@ mod tests {
         // Right's pyramid and must be skipped: 15·32·2 triangles instead
         // of 32·32·2.
         let chunk = chunk_at(
-            &crate::terrain::Face::Front,
+            &Face::Front,
             256.0,
             (480, 512),
             (192, 224),
@@ -774,11 +739,10 @@ mod tests {
 
     #[test]
     fn view_matches_fill_predicate() {
-        use crate::terrain::generate::TerrainGenerator;
         let scale = 256.0f32;
         let gen = TerrainGenerator::new(scale, 3);
         let chunk = chunk_at(
-            &crate::terrain::Face::Front,
+            &Face::Front,
             scale,
             (0, 512),
             (0, 512),

@@ -355,12 +355,55 @@ pub(crate) fn debug_ascii_slice(generator: &TerrainGenerator, grid: &FaceGrid, c
     info!("{out}");
 }
 
+/// Shared test support: chunk construction from face-remapped lattice
+/// windows, consistent with the accessor mapping and `FaceGrid`.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use super::*;
+    use crate::terrain::terrain_octree::NodeRange;
+    use bevy::prelude::Entity;
+
+    /// A chunk around hand-chosen face-remapped lattice windows (gx, gy,
+    /// gz), with raw stores, center, and length derived consistently.
+    pub(crate) fn chunk_at(
+        face: &Face,
+        scale: f32,
+        gx: (u32, u32),
+        gy: (u32, u32),
+        gz: (u32, u32),
+    ) -> Chunk {
+        // Raw (x, y, z) stores from the face-remapped windows, per the
+        // NodeRange accessor mapping.
+        let (xs, ys, zs) = match face {
+            Face::Front | Face::Back => (gx, gy, gz),
+            Face::Top | Face::Bottom => (gx, gz, gy),
+            Face::Left | Face::Right => (gz, gy, gx),
+        };
+        let grid = FaceGrid::new(face, scale);
+        let mid = |r: (u32, u32)| (r.0 + r.1) as f64 / 2.0;
+        let center = grid.position(mid(gx), mid(gy), mid(gz));
+        Chunk {
+            parent: None,
+            planet: Entity::PLACEHOLDER,
+            center: center.as_vec3(),
+            face: face.clone(),
+            length: (gx.1 - gx.0) as f32,
+            scale,
+            blocks: None,
+            range: NodeRange::from_ranges(
+                DimensionRange(xs.0, xs.1),
+                DimensionRange(ys.0, ys.1),
+                DimensionRange(zs.0, zs.1),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::terrain::octree::Octant;
     use crate::terrain::terrain_octree::{DimensionRange, NodeRange};
-    use bevy::prelude::Entity;
 
     fn octants() -> [Octant; 8] {
         [
@@ -538,24 +581,11 @@ mod tests {
     fn chunk_at(
         face: &Face,
         scale: f32,
-        x: DimensionRange,
-        y: DimensionRange,
-        z: DimensionRange,
+        x: (u32, u32),
+        y: (u32, u32),
+        z: (u32, u32),
     ) -> Chunk {
-        let grid = FaceGrid::new(face, scale);
-        let mid = |r: &DimensionRange| (r.0 + r.1) as f64 / 2.0;
-        let center = grid.position(mid(&x), mid(&y), mid(&z));
-        let length = (x.1 - x.0) as f32;
-        Chunk {
-            parent: None,
-            planet: Entity::PLACEHOLDER,
-            center: center.as_vec3(),
-            face: face.clone(),
-            length,
-            scale,
-            blocks: None,
-            range: NodeRange::from_ranges(x, y, z),
-        }
+        test_support::chunk_at(face, scale, x, y, z)
     }
 
     /// Without noise (`amp = 0`) the fill is the perfect sphere: solid iff
@@ -567,13 +597,7 @@ mod tests {
         let gen = TerrainGenerator::with_amplitude(scale, 1, 0.0);
         let face = Face::Front;
         let grid = FaceGrid::new(&face, scale);
-        let root = chunk_at(
-            &face,
-            scale,
-            DimensionRange(0, 512),
-            DimensionRange(0, 512),
-            DimensionRange(0, 512),
-        );
+        let root = chunk_at(&face, scale, (0, 512), (0, 512), (0, 512));
         assert!(gen.chunk_intersects_surface(&root));
         let blocks = fill_blocks(&gen, &grid, &root);
         // Face-center column (gx = gy = 256 → x = y = 0): p = (0, 0, gz),
@@ -594,15 +618,8 @@ mod tests {
         let gen = TerrainGenerator::new(scale, 1);
         let face = Face::Front;
         let grid = FaceGrid::new(&face, scale);
-        let full = DimensionRange(0, 512);
         // Deep inside: world |p| ≤ ~105 ≪ sea − band.
-        let inside = chunk_at(
-            &face,
-            scale,
-            DimensionRange(200, 232),
-            DimensionRange(200, 232),
-            DimensionRange(40, 72),
-        );
+        let inside = chunk_at(&face, scale, (200, 232), (200, 232), (40, 72));
         let blocks = fill_blocks(&gen, &grid, &inside);
         assert!(!gen.chunk_intersects_surface(&inside));
         for k in 0..CHUNK_SIZE {
@@ -613,13 +630,7 @@ mod tests {
             }
         }
         // Far outside: world |p| ≥ ~441 ≫ sea + band.
-        let outside = chunk_at(
-            &face,
-            scale,
-            DimensionRange(200, 232),
-            DimensionRange(200, 232),
-            DimensionRange(440, 472),
-        );
+        let outside = chunk_at(&face, scale, (200, 232), (200, 232), (440, 472));
         let blocks = fill_blocks(&gen, &grid, &outside);
         for k in 0..CHUNK_SIZE {
             for j in 0..CHUNK_SIZE {
@@ -639,13 +650,7 @@ mod tests {
         let c = TerrainGenerator::new(scale, 8);
         let face = Face::Front;
         let grid = FaceGrid::new(&face, scale);
-        let root = chunk_at(
-            &face,
-            scale,
-            DimensionRange(0, 512),
-            DimensionRange(0, 512),
-            DimensionRange(0, 512),
-        );
+        let root = chunk_at(&face, scale, (0, 512), (0, 512), (0, 512));
         let blocks_a = fill_blocks(&a, &grid, &root);
         let blocks_b = fill_blocks(&b, &grid, &root);
         let blocks_c = fill_blocks(&c, &grid, &root);
@@ -669,13 +674,7 @@ mod tests {
         let gen = TerrainGenerator::new(scale, 3);
         let face = Face::Front;
         let grid = FaceGrid::new(&face, scale);
-        let root = chunk_at(
-            &face,
-            scale,
-            DimensionRange(0, 512),
-            DimensionRange(0, 512),
-            DimensionRange(0, 512),
-        );
+        let root = chunk_at(&face, scale, (0, 512), (0, 512), (0, 512));
         let blocks = fill_blocks(&gen, &grid, &root);
         // k ascends inward → outward on Front: deep Stone first, then the
         // surface block. Invariants: exactly one Grass, and nothing solid

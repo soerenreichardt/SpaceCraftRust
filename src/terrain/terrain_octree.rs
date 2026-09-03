@@ -73,10 +73,18 @@ impl Octree<TerrainOctreeNode> {
     pub fn update(&mut self, camera_translation: Vec3, commands: &mut Commands, event_writer: &mut EventWriter<RemoveTerrainChildren>) {
         let center_on_sphere = self.node.center.normalize() * self.node.scale;
         let distance_to_camera = (camera_translation - center_on_sphere).length();
+        // Split threshold (≈2.5·node length). Merging uses double this —
+        // hysteresis: with split and merge sharing one threshold, any node
+        // whose distance sits between the child-merge and parent-split
+        // thresholds oscillates split/merge every other frame (constant
+        // respawn/remesh churn, leaking mesh assets). Doubling the merge
+        // threshold also makes it equal the parent's split threshold in the
+        // same metric, so a just-split parent's nearest child never
+        // immediately merges back.
         let threshold = 2.0f32.powf(-(self.level as f32)) * 5.0 * self.node.scale;
 
         if let Some(children) = self.children() {
-            if distance_to_camera > threshold {
+            if distance_to_camera > threshold * 2.0 {
                 self.merge();
                 event_writer.write(RemoveTerrainChildren(self.node.entity));
                 return;
