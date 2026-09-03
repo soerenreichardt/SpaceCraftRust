@@ -84,6 +84,16 @@ impl FaceGrid {
         p.normalize() * self.scale
     }
 
+    /// The world axis a lattice dimension runs along (0 = gx/e1,
+    /// 1 = gy/e2, 2 = gz/e3) — face normals for block-terrain cubes.
+    pub(crate) fn lattice_axis(&self, axis: usize) -> DVec3 {
+        match axis {
+            0 => self.e1,
+            1 => self.e2,
+            _ => self.e3,
+        }
+    }
+
     /// Whether this face's lattice frame is left-handed. Left-handed faces
     /// need a triangle-winding flip when meshing.
     pub(crate) fn is_left_handed(&self) -> bool {

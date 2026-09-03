@@ -3,7 +3,9 @@ use crate::terrain::generate::{
     debug_ascii_slice, fill_blocks, FaceGrid, TerrainGenerator, DEBUG_FILL_SLICE,
 };
 use crate::terrain::mesh::base_plane::CurvedBasePlane;
-use crate::terrain::mesh::marching_cubes::{generate_chunk_payload, GeneratedChunk};
+use crate::terrain::mesh::marching_cubes::{
+    generate_chunk_payload, tier_for, GeneratedChunk, MeshTier,
+};
 use crate::terrain::planet::Planet;
 use crate::terrain::terrain_octree::RemoveTerrainChildren;
 use bevy::pbr::wireframe::Wireframe;
@@ -14,25 +16,6 @@ use bevy::tasks::{AsyncComputeTaskPool, Task};
 use std::future::Future;
 
 pub(crate) const MESH_SIZE: usize = 16;
-
-/// Which mesh a chunk renders.
-enum MeshTier {
-    /// The flat projected quad patch — the far tier. Dormant: `tier_for`
-    /// does not select it yet (MC covers the whole surface at every level);
-    /// distance/level thresholds will revive it.
-    BasePlane,
-    MarchingCubes,
-}
-
-/// Tier selection: band chunks carry the terrain surface at every level →
-/// MC everywhere it matters; everything else is deep interior or empty
-/// space → no mesh. (Every terrain surface point lies in some band chunk,
-/// so this covers the planet.) Later: far → `BasePlane`, near → `Blocky`.
-fn tier_for(chunk: &Chunk, generator: &TerrainGenerator) -> Option<MeshTier> {
-    generator
-        .chunk_intersects_surface(chunk)
-        .then_some(MeshTier::MarchingCubes)
-}
 
 /// A chunk's in-flight generation task (fill + occupancy view + marching
 /// cubes) on the async compute pool. Dropped — and thereby canceled — with
@@ -75,25 +58,11 @@ pub fn generate_chunk_meshes(
             debug_ascii_slice(generator, &grid, &chunk);
         }
 
-        match tier_for(&chunk, generator) {
-            Some(MeshTier::MarchingCubes) => {
-                // Band chunk: generate off-thread. While the task is in
-                // flight the parent's coarser mesh stays visible — no
-                // holes, and no frame stalls on ~36k noise evaluations.
-                // The payload is a pure function of (signature, lattice
-                // window): fill, occupancy, and mesh all read one set of
-                // samples.
-                let generator = generator.clone();
-                let grid = grid.clone();
-                let snapshot = chunk.clone();
-                let task = AsyncComputeTaskPool::get().spawn(async move {
-                    generate_chunk_payload(&generator, &grid, &snapshot)
-                });
-                commands.entity(entity).insert(ChunkTask(task));
-            }
+        let tier = tier_for(&chunk, generator);
+        match tier {
+            // Dormant far tier (not selected yet) — the synchronous
+            // flat-patch path.
             Some(MeshTier::BasePlane) => {
-                // Dormant far tier (not selected yet) — the synchronous
-                // flat-patch path.
                 chunk.blocks = Some(fill_blocks(generator, &grid, &chunk));
                 let scale = chunk.scale as u32;
                 let radial = chunk.range.z(chunk.face.clone());
@@ -105,6 +74,21 @@ pub fn generate_chunk_meshes(
                 let render_bundle =
                     mesh_generator.compute_mesh(&chunk, &mut meshes, &mut materials);
                 commands.entity(entity).insert(render_bundle);
+            }
+            // The two generated tiers (mid: marching cubes, near: block
+            // terrain): generate off-thread. While the task is in flight
+            // the parent's coarser mesh stays visible — no holes, and no
+            // frame stalls on ~36k noise evaluations. The payload is a
+            // pure function of (signature, lattice window, tier): fill,
+            // occupancy, and mesh all read one set of samples.
+            Some(tier) => {
+                let generator = generator.clone();
+                let grid = grid.clone();
+                let snapshot = chunk.clone();
+                let task = AsyncComputeTaskPool::get().spawn(async move {
+                    generate_chunk_payload(&generator, &grid, &snapshot, tier)
+                });
+                commands.entity(entity).insert(ChunkTask(task));
             }
             None => {
                 // Deep interior or empty space — uniform fill (all Stone /
@@ -151,6 +135,7 @@ pub fn poll_chunk_tasks(
             let render_bundle = mesh_generator.mc_mesh(
                 result.positions,
                 result.normals,
+                result.colors,
                 result.indices,
                 &mut meshes,
                 &mut materials,
@@ -267,6 +252,7 @@ impl MeshGenerator {
         &mut self,
         positions: Vec<[f32; 3]>,
         normals: Vec<[f32; 3]>,
+        colors: Vec<[f32; 4]>,
         indices: Vec<u32>,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
@@ -274,6 +260,7 @@ impl MeshGenerator {
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
         mesh.insert_indices(Indices::U32(indices));
 
         // One shared material for every MC mesh. No Visibility component
@@ -298,9 +285,10 @@ mod tests {
     use crate::terrain::generate::test_support;
     use crate::terrain::Face;
 
-    /// Band chunks get MC; deep-interior and far-outside chunks get no mesh.
+    /// Tier selection: band leaves get the block tier, band non-leaves
+    /// marching cubes, off-band chunks no mesh.
     #[test]
-    fn tier_is_mc_only_for_band_chunks() {
+    fn tier_selection() {
         let scale = 256.0f32;
         let gen = TerrainGenerator::new(scale, 1);
         let root =
@@ -309,6 +297,10 @@ mod tests {
             tier_for(&root, &gen),
             Some(MeshTier::MarchingCubes)
         ));
+        // A leaf-sized band chunk (width 32 → block step 1): the near tier.
+        let leaf =
+            test_support::chunk_at(&Face::Front, scale, (192, 224), (192, 224), (224, 256));
+        assert!(matches!(tier_for(&leaf, &gen), Some(MeshTier::Blocky)));
         let inside =
             test_support::chunk_at(&Face::Front, scale, (200, 232), (200, 232), (40, 72));
         assert!(tier_for(&inside, &gen).is_none());
@@ -317,6 +309,7 @@ mod tests {
         assert!(tier_for(&outside, &gen).is_none());
     }
 }
+
 
 
 

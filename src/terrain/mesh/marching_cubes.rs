@@ -20,10 +20,15 @@ use crate::terrain::generate::{face_owns_cell, BandClass, FaceGrid, TerrainGener
 use crate::terrain::terrain_octree::DimensionRange;
 use crate::terrain::CHUNK_SIZE;
 use bevy::math::DVec3;
+use crate::terrain::mesh::blocky;
 
-/// Sample-grid width: a chunk's 32³ blocks plus the +1 positive ring
-/// (index 32 = the neighbor's block 0).
-const VIEW_SIZE: usize = CHUNK_SIZE + 1;
+/// Sample-grid domain width: a chunk's 32³ blocks plus the +1 positive
+/// ring (index 32 = the neighbor's block 0). The internal storage also
+/// holds a −1 ring (the minus-side neighbor's block 31) for the blocky
+/// mesher's border faces.
+pub(crate) const VIEW_SIZE: usize = CHUNK_SIZE + 1;
+/// Internal storage extent per axis: −1..=32.
+const EXTENT: usize = VIEW_SIZE + 1;
 
 /// Solidity of a chunk's 33³ sample grid — the chunk's own blocks plus the
 /// +1 positive ring on x/y/z, every sample straight from the generator (a
@@ -31,6 +36,8 @@ const VIEW_SIZE: usize = CHUNK_SIZE + 1;
 /// entities, which don't survive merges). Same predicate as `fill_blocks`
 /// (pinned by a test).
 pub(crate) struct OccupancyView {
+    /// Solidity over the extended domain −1..=32 per axis, indexed with a
+    /// +1 offset.
     solid: Vec<bool>,
 }
 
@@ -44,14 +51,15 @@ impl OccupancyView {
         let (step_x, step_y, step_z) = (step(x_range), step(y_range), step(z_range));
         let (x0, y0, z0) = (x_range.0 as f64, y_range.0 as f64, z_range.0 as f64);
 
-        let mut solid = vec![false; VIEW_SIZE * VIEW_SIZE * VIEW_SIZE];
-        for k in 0..VIEW_SIZE {
+        let mut solid = vec![false; EXTENT * EXTENT * EXTENT];
+        for k in -1..=VIEW_SIZE as isize - 1 {
             let gz = z0 + k as f64 * step_z;
-            for j in 0..VIEW_SIZE {
+            for j in -1..=VIEW_SIZE as isize - 1 {
                 let gy = y0 + j as f64 * step_y;
-                for i in 0..VIEW_SIZE {
+                for i in -1..=VIEW_SIZE as isize - 1 {
                     let gx = x0 + i as f64 * step_x;
-                    solid[VIEW_SIZE * (VIEW_SIZE * k + j) + i] =
+                    let (i, j, k) = ((i + 1) as usize, (j + 1) as usize, (k + 1) as usize);
+                    solid[EXTENT * (EXTENT * k + j) + i] =
                         generator.is_solid_at(grid, gx, gy, gz);
                 }
             }
@@ -60,18 +68,32 @@ impl OccupancyView {
     }
 
     #[inline]
-    fn solid(&self, i: usize, j: usize, k: usize) -> bool {
-        self.solid[VIEW_SIZE * (VIEW_SIZE * k + j) + i]
+    pub(crate) fn solid(&self, i: usize, j: usize, k: usize) -> bool {
+        self.solid_at(i as isize, j as isize, k as isize)
     }
 
-    /// Test constructor.
+    /// Solidity over the extended domain (−1 = the minus-side neighbor's
+    /// outermost block; 32 = the plus-side neighbor's block 0).
+    #[inline]
+    pub(crate) fn solid_at(&self, i: isize, j: isize, k: isize) -> bool {
+        debug_assert!(
+            (-1..=VIEW_SIZE as isize - 1).contains(&i)
+                && (-1..=VIEW_SIZE as isize - 1).contains(&j)
+                && (-1..=VIEW_SIZE as isize - 1).contains(&k)
+        );
+        let (i, j, k) = ((i + 1) as usize, (j + 1) as usize, (k + 1) as usize);
+        self.solid[EXTENT * (EXTENT * k + j) + i]
+    }
+
+    /// Test constructor over the extended domain (−1..=32 per axis).
     #[cfg(test)]
-    fn from_fn(f: impl Fn(usize, usize, usize) -> bool) -> Self {
-        let mut solid = vec![false; VIEW_SIZE * VIEW_SIZE * VIEW_SIZE];
-        for k in 0..VIEW_SIZE {
-            for j in 0..VIEW_SIZE {
-                for i in 0..VIEW_SIZE {
-                    solid[VIEW_SIZE * (VIEW_SIZE * k + j) + i] = f(i, j, k);
+    pub(crate) fn from_fn(f: impl Fn(isize, isize, isize) -> bool) -> Self {
+        let mut solid = vec![false; EXTENT * EXTENT * EXTENT];
+        for k in -1..=VIEW_SIZE as isize - 1 {
+            for j in -1..=VIEW_SIZE as isize - 1 {
+                for i in -1..=VIEW_SIZE as isize - 1 {
+                    let (u, v, w) = ((i + 1) as usize, (j + 1) as usize, (k + 1) as usize);
+                    solid[EXTENT * (EXTENT * w + v) + u] = f(i, j, k);
                 }
             }
         }
@@ -79,13 +101,50 @@ impl OccupancyView {
     }
 }
 
-/// Marching-cubes output for one chunk — task-local buffers.
+/// One chunk's mesh output — task-local buffers, shared by both meshers.
+/// The blocky mesher fills `normals` directly (per-face axis normals); the
+/// MC path computes gradient normals in the payload post-pass instead.
 #[derive(Default)]
 pub(crate) struct McOutput {
     /// Chunk-local vertex positions — flat crossing positions, center
     /// subtracted. Never sphere-projected (that would flatten mountains).
     pub(crate) positions: Vec<[f32; 3]>,
+    pub(crate) normals: Vec<[f32; 3]>,
+    /// Per-vertex block colors (the solid corner each crossing edge
+    /// emerges from — Grass on surface faces, Stone on cliffs and cave
+    /// interiors).
+    pub(crate) colors: Vec<[f32; 4]>,
     pub(crate) indices: Vec<u32>,
+}
+
+/// Which mesh a chunk renders.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum MeshTier {
+    /// The flat projected quad patch — the far tier. Dormant: `tier_for`
+    /// does not select it yet; distance/level thresholds will revive it.
+    BasePlane,
+    /// The mid tier — the noise surface as a smooth marching-cubes mesh.
+    MarchingCubes,
+    /// The near tier — the block world itself: one cube face per
+    /// solid/air interface in `Blocks` (`blocky::blocky_mesh`). Selected
+    /// for band chunks at leaf level, where the block step is exactly 1
+    /// world unit (blocks ARE voxels) and the LOD keeps them near the
+    /// camera.
+    Blocky,
+}
+
+/// Tier selection: band chunks carry the terrain surface; off-band chunks
+/// are deep interior or empty space (no mesh). Within the band, leaves
+/// get the block tier, everything else marching cubes.
+pub(crate) fn tier_for(chunk: &Chunk, generator: &TerrainGenerator) -> Option<MeshTier> {
+    if !generator.chunk_intersects_surface(chunk) {
+        return None;
+    }
+    if (chunk.length - CHUNK_SIZE as f32).abs() < 0.5 {
+        Some(MeshTier::Blocky)
+    } else {
+        Some(MeshTier::MarchingCubes)
+    }
 }
 
 /// A chunk's full generation payload — the output of one off-thread task.
@@ -95,6 +154,8 @@ pub(crate) struct GeneratedChunk {
     pub(crate) blocks: Blocks,
     /// Chunk-local MC vertex positions (flat crossing positions).
     pub(crate) positions: Vec<[f32; 3]>,
+    /// Per-vertex block colors — Grass on surface faces, Stone below.
+    pub(crate) colors: Vec<[f32; 4]>,
     /// Gradient normals (`−∇density` at the vertex) — the true surface
     /// orientation, so lighting shows the actual relief; computed
     /// off-thread so applying a result costs no `compute_normals`.
@@ -111,74 +172,99 @@ pub(crate) fn generate_chunk_payload(
     generator: &TerrainGenerator,
     grid: &FaceGrid,
     chunk: &Chunk,
+    tier: MeshTier,
 ) -> GeneratedChunk {
     match generator.band_class(chunk) {
         BandClass::Outside => GeneratedChunk {
             blocks: Blocks::default(),
             positions: Vec::new(),
             normals: Vec::new(),
+            colors: Vec::new(),
             indices: Vec::new(),
         },
         BandClass::Inside => GeneratedChunk {
             blocks: Blocks::stone(),
             positions: Vec::new(),
             normals: Vec::new(),
+            colors: Vec::new(),
             indices: Vec::new(),
         },
         BandClass::Band => {
             let view = OccupancyView::build(generator, grid, chunk);
             let blocks = blocks_from_view(&view, grid);
             let mut out = McOutput::default();
-            marching_cubes(&view, grid, chunk, &mut out);
-            let center = chunk.center.as_dvec3();
-            let normals = out
-                .positions
-                .iter()
-                .map(|p| {
-                    let world =
-                        DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64) + center;
-                    let n = generator.surface_normal(world);
-                    [n.x as f32, n.y as f32, n.z as f32]
-                })
-                .collect();
+            let (positions, normals, colors, indices) = match tier {
+                // The near tier consumes the block world directly; its
+                // mesher emits per-face axis normals itself.
+                MeshTier::Blocky => {
+                    blocky::blocky_mesh(&view, &blocks, grid, chunk, &mut out);
+                    (out.positions, out.normals, out.colors, out.indices)
+                }
+                // Mid tier: marching cubes, with gradient normals computed
+                // off-thread (no `compute_normals` on the main thread).
+                MeshTier::MarchingCubes | MeshTier::BasePlane => {
+                    marching_cubes(&view, &blocks, grid, chunk, &mut out);
+                    let center = chunk.center.as_dvec3();
+                    let normals = out
+                        .positions
+                        .iter()
+                        .map(|p| {
+                            let world =
+                                DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64) + center;
+                            let n = generator.surface_normal(world);
+                            [n.x as f32, n.y as f32, n.z as f32]
+                        })
+                        .collect();
+                    (out.positions, normals, out.colors, out.indices)
+                }
+            };
             GeneratedChunk {
                 blocks,
-                positions: out.positions,
+                positions,
                 normals,
-                indices: out.indices,
+                colors,
+                indices,
             }
         }
     }
 }
 
+/// A sample column's surface block: the outermost solid along the radial
+/// direction (the extreme-k solid — the block the terrain surface emerges
+/// from). One rule, shared by the block fill and ring-corner vertex
+/// colors, so the two cannot drift.
+fn column_surface_k(
+    view: &OccupancyView,
+    i: usize,
+    j: usize,
+    outward: bool,
+) -> Option<usize> {
+    if outward {
+        (0..VIEW_SIZE).rev().find(|&k| view.solid(i, j, k))
+    } else {
+        (0..VIEW_SIZE).find(|&k| view.solid(i, j, k))
+    }
+}
+
 /// Fills a chunk's `Blocks` from an existing occupancy view: per (i, j)
-/// column, the outermost solid block gets `Grass`, solids below it `Stone`,
-/// air stays `Air` (cave pockets get `Stone` ceilings). The view's samples
-/// (chunk blocks + the +1 ring) are the solidities — no second sampling
-/// pass.
+/// column, the outermost solid block gets `Grass`, solids below it
+/// `Stone`, air stays `Air` (cave pockets get `Stone` ceilings). The
+/// view's samples (chunk blocks + the +1 ring) are the solidities — no
+/// second sampling pass.
 pub(crate) fn blocks_from_view(view: &OccupancyView, grid: &FaceGrid) -> Blocks {
     let outward = grid.gz_points_outward();
     let mut blocks = [BlockType::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
     for i in 0..CHUNK_SIZE {
         for j in 0..CHUNK_SIZE {
-            let mut solids = [false; CHUNK_SIZE];
-            for (k, solid) in solids.iter_mut().enumerate() {
-                *solid = view.solid(i, j, k);
-            }
-            let surface_k = if outward {
-                solids.iter().rposition(|&s| s)
-            } else {
-                solids.iter().position(|&s| s)
-            };
-            if let Some(surface_k) = surface_k {
-                for k in 0..CHUNK_SIZE {
-                    if solids[k] {
-                        blocks[CHUNK_SIZE * (CHUNK_SIZE * k + j) + i] = if k == surface_k {
+            let surface_k = column_surface_k(view, i, j, outward);
+            for k in 0..CHUNK_SIZE {
+                if view.solid(i, j, k) {
+                    blocks[CHUNK_SIZE * (CHUNK_SIZE * k + j) + i] =
+                        if Some(k) == surface_k {
                             BlockType::Grass
                         } else {
                             BlockType::Stone
                         };
-                    }
                 }
             }
         }
@@ -195,6 +281,7 @@ pub(crate) fn blocks_from_view(view: &OccupancyView, grid: &FaceGrid) -> Blocks 
 /// two corners (binary occupancy — height quantizes to half a block step).
 pub(crate) fn marching_cubes(
     view: &OccupancyView,
+    blocks: &Blocks,
     grid: &FaceGrid,
     chunk: &Chunk,
     out: &mut McOutput,
@@ -262,6 +349,48 @@ pub(crate) fn marching_cubes(
                             let p = grid.position(m_gx, m_gy, m_gz) - center;
                             slots[e] = out.positions.len() as u32;
                             out.positions.push([p.x as f32, p.y as f32, p.z as f32]);
+                            // Vertex color: the block the crossing edge
+                            // emerges from — the edge's SOLID corner.
+                            let (sx, sy, sz) = if view.solid(
+                                i + ax as usize,
+                                j + ay as usize,
+                                k + az as usize,
+                            ) {
+                                (ax, ay, az)
+                            } else {
+                                (bx, by, bz)
+                            };
+                            let (ci, cj, ck) = (
+                                i + sx as usize,
+                                j + sy as usize,
+                                k + sz as usize,
+                            );
+                            let block = if ci < CHUNK_SIZE
+                                && cj < CHUNK_SIZE
+                                && ck < CHUNK_SIZE
+                            {
+                                blocks.get(ci, cj, ck)
+                            } else {
+                                // +1 ring corner: the neighbor's block,
+                                // typed by the same column rule the
+                                // neighbor's fill applies. For +x/+y rings
+                                // the view spans exactly the same-level
+                                // neighbor's column window, so border
+                                // vertex colors match across the seam (the
+                                // old Stone hardcode painted every border
+                                // crossing gray). The only truncated case —
+                                // the +z ring on outward-gz faces — occurs
+                                // on undersides (cave ceilings), where
+                                // Stone is correct anyway.
+                                let surface =
+                                    column_surface_k(view, ci, cj, grid.gz_points_outward());
+                                if surface == Some(ck) {
+                                    BlockType::Grass
+                                } else {
+                                    BlockType::Stone
+                                }
+                            };
+                            out.colors.push(block.color());
                         }
                         out.indices.push(slots[e]);
                     }
@@ -674,6 +803,7 @@ mod tests {
     use crate::terrain::generate::{fill_blocks, test_support, TerrainGenerator};
     use crate::terrain::Face;
     use bevy::math::DVec3;
+use crate::terrain::mesh::blocky;
 
     use test_support::chunk_at;
 
@@ -713,7 +843,7 @@ mod tests {
         for solid in [false, true] {
             let view = OccupancyView::from_fn(|_, _, _| solid);
             let mut out = McOutput::default();
-            marching_cubes(&view, &grid, &chunk, &mut out);
+            marching_cubes(&view, &Blocks::default(), &grid, &chunk, &mut out);
             assert!(out.indices.is_empty(), "solid = {solid}");
         }
     }
@@ -732,7 +862,7 @@ mod tests {
         let grid = FaceGrid::new(&chunk.face, 256.0);
         let view = OccupancyView::from_fn(|i, j, k| (i, j, k) == (17, 17, 17));
         let mut out = McOutput::default();
-        marching_cubes(&view, &grid, &chunk, &mut out);
+        marching_cubes(&view, &Blocks::default(), &grid, &chunk, &mut out);
         // The 8 cells around the point each cut exactly one triangle.
         assert_eq!(out.indices.len() / 3, 8);
         assert_eq!(out.positions.len(), 24); // 3 distinct vertices per cell, no sharing
@@ -759,7 +889,7 @@ mod tests {
         // world z = 224 + k (step 1); solid iff z < 240 → k < 16.
         let view = OccupancyView::from_fn(|_i, _j, k| k < 16);
         let mut out = McOutput::default();
-        marching_cubes(&view, &grid, &chunk, &mut out);
+        marching_cubes(&view, &Blocks::default(), &grid, &chunk, &mut out);
 
         assert_eq!(out.indices.len() / 3, 2 * 32 * 32);
         all_positions_inside(&chunk, &out);
@@ -792,7 +922,7 @@ mod tests {
         // world y = 224 + k (gz = 224 + k); solid iff y < 240 → k < 16.
         let view = OccupancyView::from_fn(|_i, _j, k| k < 16);
         let mut out = McOutput::default();
-        marching_cubes(&view, &grid, &chunk, &mut out);
+        marching_cubes(&view, &Blocks::default(), &grid, &chunk, &mut out);
 
         assert_eq!(out.indices.len() / 3, 2 * 32 * 32);
         all_positions_inside(&chunk, &out);
@@ -825,7 +955,7 @@ mod tests {
         let grid = FaceGrid::new(&chunk.face, 256.0);
         let view = OccupancyView::from_fn(|_i, _j, k| k < 16);
         let mut out = McOutput::default();
-        marching_cubes(&view, &grid, &chunk, &mut out);
+        marching_cubes(&view, &Blocks::default(), &grid, &chunk, &mut out);
         assert_eq!(out.indices.len() / 3, 2 * 15 * 32);
     }
 
@@ -865,7 +995,7 @@ mod tests {
         let gen = TerrainGenerator::new(scale, 3);
         let chunk = chunk_at(&Face::Front, scale, (0, 512), (0, 512), (0, 512));
         let grid = FaceGrid::new(&chunk.face, scale);
-        let payload = generate_chunk_payload(&gen, &grid, &chunk);
+        let payload = generate_chunk_payload(&gen, &grid, &chunk, MeshTier::MarchingCubes);
         let blocks = fill_blocks(&gen, &grid, &chunk);
         for k in 0..CHUNK_SIZE {
             for j in 0..CHUNK_SIZE {
@@ -905,5 +1035,61 @@ mod tests {
             max_radial_deviation > 0.01,
             "normals are purely radial — the gradient is not reaching the mesh"
         );
+        // Vertex colors: one per vertex, opaque, and both surface (Grass)
+        // and subsurface/cliff (Stone) colors present.
+        assert_eq!(payload.colors.len(), payload.positions.len());
+        for c in &payload.colors {
+            assert_eq!(c[3], 1.0, "vertex color not opaque: {c:?}");
+        }
+        assert!(
+            payload.colors.contains(&BlockType::Grass.color()),
+            "no Grass-colored vertex — surface coloring missing"
+        );
+        assert!(
+            payload.colors.contains(&BlockType::Stone.color()),
+            "no Stone-colored vertex — cliff/subsurface coloring missing"
+        );
+    }
+
+    /// Ring-corner vertex colors: a border crossing whose solid corner is
+    /// a +1 ring point that IS its column's surface block must be Grass —
+    /// the old Stone hardcode painted every chunk border gray.
+    #[test]
+    fn ring_corners_take_the_column_surface_color() {
+        // Front chunk, world box x,y ∈ [−64, −32], z ∈ [224, 256], step 1.
+        let chunk = chunk_at(&Face::Front, 256.0, (192, 224), (192, 224), (224, 256));
+        let grid = FaceGrid::new(&chunk.face, 256.0);
+        // The ring column's surface sits one step higher than the own
+        // columns': own blocks solid for k < 15, ring (i = 32) solid for
+        // k < 16. The border cell (31, j, 15) crosses between its own
+        // air corner (31, k = 15) and the solid ring corner (32, k = 15) —
+        // which is that ring column's outermost solid (the surface block).
+        let view = OccupancyView::from_fn(|i, _j, k| {
+            if i == VIEW_SIZE as isize - 1 {
+                k < 16
+            } else {
+                k < 15
+            }
+        });
+        let blocks = blocks_from_view(&view, &grid);
+        let mut out = McOutput::default();
+        marching_cubes(&view, &blocks, &grid, &chunk, &mut out);
+        assert!(!out.colors.is_empty());
+
+        // The x-edge crossing vertices of the border cells sit at
+        // chunk-local x = +15.5 (midpoint of i = 31 and the ring), z = −1
+        // (k = 15). All of them must be Grass-colored.
+        let mut border_vertices = 0;
+        for (p, c) in out.positions.iter().zip(&out.colors) {
+            if (p[0] - 15.5).abs() < 1e-3 && (p[2] + 1.0).abs() < 1e-3 {
+                border_vertices += 1;
+                assert_eq!(
+                    *c,
+                    BlockType::Grass.color(),
+                    "border vertex at {p:?} is not Grass-colored"
+                );
+            }
+        }
+        assert!(border_vertices > 0, "no border-crossing vertices found");
     }
 }
