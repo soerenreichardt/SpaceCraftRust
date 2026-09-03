@@ -7,11 +7,9 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 use crate::terrain::block::BlockType;
-use crate::terrain::Face;
+use crate::terrain::CHUNK_SIZE;
 use crate::terrain::generate::TerrainGenerator;
 use crate::terrain::planet::Planet;
-
-pub(crate) const MESH_SIZE: usize = 16;
 
 pub fn generate_chunk_meshes(
     mut commands: Commands,
@@ -20,31 +18,16 @@ pub fn generate_chunk_meshes(
     mut parents_query: Query<&mut Visibility>,
     mesh_generator: Res<MeshGenerator>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut gizmo_assets: ResMut<Assets<GizmoAsset>>,
 ) {
     for (entity, mut chunk) in query.iter_mut() {
-        // Mesh only the radial slice adjacent to the surface plane (gz = scale/2,
-        // where the sphere crosses the face volume). The old `z.0 == 0` gate picked
-        // the slice at the far end of the cube — the planet-core side on the positive
-        // faces, outer space on the negative ones — whose sphere projection lands on
-        // the cube's edge zones rather than the surface patch it renders at, so those
-        // faces refined against the wrong reference point. The root (full range) stays
-        // meshed so an unrefined face still renders.
-        let scale = chunk.scale as u32;
-        let radial = chunk.range.z(chunk.face.clone());
-        let is_root = radial.0 == 0 && radial.1 == scale;
-        let is_surface_slice = radial.0 == scale / 2;
-        if !(is_root || is_surface_slice) {
-            commands.entity(entity).insert(Visibility::Visible);
-            continue;
-        }
-
         let Ok(planet) = planets.get(chunk.planet_entity) else {
             continue;
         };
         let terrain_generator = &planet.terrain_generator;
 
-        let render_bundle = mesh_generator.compute_mesh(&mut chunk, terrain_generator, &mut meshes, &mut materials);
+        let render_bundle = mesh_generator.compute_mesh(&mut chunk, terrain_generator, &mut meshes, &mut materials, &mut gizmo_assets);
         commands.entity(entity).insert(render_bundle);
 
         if let Some(parent) = chunk.parent {
@@ -93,9 +76,13 @@ impl MeshGenerator {
         terrain_generator: &TerrainGenerator,
         meshes: &mut Assets<Mesh>,
         materials: &mut Assets<StandardMaterial>,
+        gizmo_assets: &mut Assets<GizmoAsset>,
     ) -> impl Bundle {
+        let mut gizmo = GizmoAsset::default();
+
         let base_plane = CurvedBasePlane::compute_for_chunk(chunk);
-        chunk.blocks = Some(Self::fill_blocks(&base_plane, terrain_generator, chunk.face.clone(), chunk.length));
+        gizmo.sphere(base_plane.vertex_at(8, 8).as_vec3(), 0.1, Color::WHITE);
+        chunk.blocks = Some(Self::fill_blocks(&base_plane, terrain_generator, chunk));
         let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
         let (vertices, colors) = base_plane.data();
         mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
@@ -113,27 +100,30 @@ impl MeshGenerator {
                 base_color: Color::WHITE,
                 ..default()
             })),
-            Visibility::Visible,
-            Wireframe
+            Visibility::Hidden,
+            Wireframe,
+            Gizmo {
+                handle: gizmo_assets.add(gizmo),
+                line_config: GizmoLineConfig {
+                    width: 4.,
+                    ..default()
+                },
+                ..default()
+            }
         )
     }
 
-    pub(crate) fn fill_blocks(base_plane: &CurvedBasePlane, terrain_generator: &TerrainGenerator, face: Face, length: f32) -> Blocks {
-        let (axis_a, axis_b) = face.perpendicular_vectors();
-        let axis_a = DVec3::from(axis_a);
-        let axis_b = DVec3::from(axis_b);
-        let axis_up = axis_a.cross(axis_b);
-        let step_size = (length / MESH_SIZE as f32) as f64;
-        let offset_length = step_size / 2.0;
-        let (offset_x, offset_y) = (axis_a * offset_length, axis_b + offset_length);
-
+    pub(crate) fn fill_blocks(base_plane: &CurvedBasePlane, terrain_generator: &TerrainGenerator, chunk: &Chunk) -> Blocks {
+        let step_size = (chunk.length / CHUNK_SIZE as f32) as f64;
+        let scale = chunk.scale as f64;
         let mut blocks = Blocks::default();
 
-        for z in 0..MESH_SIZE {
-            for y in 0..MESH_SIZE {
-                for x in 0..MESH_SIZE {
-                    let vertex = base_plane.vertex_at(x, y);
-                    let sample_position = (vertex + offset_x + offset_y) + axis_up * step_size;
+        for z in 0..CHUNK_SIZE {
+            for y in 0..CHUNK_SIZE {
+                for x in 0..CHUNK_SIZE {
+                    let middle_point = base_plane.middle_point_at(x, y);
+                    let depth = (z as f64 + 0.5) * step_size;
+                    let sample_position = middle_point.normalize() * (scale - depth).max(0.0);
                     let noise_value = terrain_generator.sample(sample_position);
                     if noise_value > 0.0 {
                         blocks.set(BlockType::Stone, x, y, z);
@@ -145,5 +135,69 @@ impl MeshGenerator {
         }
 
         blocks
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terrain::chunk::Chunk;
+    use crate::terrain::terrain_octree::NodeRange;
+    use crate::terrain::Face;
+
+    /// A chunk in the geometry that actually gets meshed: the surface slice
+    /// (radial range [scale/2, scale]), whose length matches the scale.
+    fn test_chunk(center: Vec3) -> Chunk {
+        Chunk {
+            parent: None,
+            center,
+            face: Face::Top,
+            length: 32.0,
+            scale: 32.0,
+            planet_entity: Entity::PLACEHOLDER,
+            blocks: None,
+            range: NodeRange::from_scale(32.0),
+        }
+    }
+
+    fn stone_count_at_layer(blocks: &Blocks, z: usize) -> usize {
+        (0..CHUNK_SIZE)
+            .map(|y| {
+                (0..CHUNK_SIZE)
+                    .filter(|x| blocks.get(*x, y, z) == BlockType::Stone)
+                    .count()
+            })
+            .sum()
+    }
+
+    #[test]
+    fn fill_blocks_produces_a_realistic_world_space_mix() {
+        let generator = TerrainGenerator::new(32.0, 0);
+        let chunk = test_chunk(Vec3::Y * 32.0);
+        let base_plane = CurvedBasePlane::compute_for_chunk(&chunk);
+        let blocks = MeshGenerator::fill_blocks(&base_plane, &generator, &chunk);
+
+        // At the surface (z = 0, radius ≈ sea level) the noise decides —
+        // a mix of stone and air, not a uniform verdict.
+        let surface = stone_count_at_layer(&blocks, 0);
+        assert!(surface > 0, "no stone at the surface layer");
+        assert!(surface < CHUNK_SIZE * CHUNK_SIZE, "surface layer fully solid");
+
+        // The deepest layer sits near the planet center: all stone.
+        let deep = stone_count_at_layer(&blocks, CHUNK_SIZE - 1);
+        assert_eq!(deep, CHUNK_SIZE * CHUNK_SIZE, "deep layer not fully solid");
+
+        // Some stone, some air overall.
+        let total_stone: usize = (0..CHUNK_SIZE).map(|z| stone_count_at_layer(&blocks, z)).sum();
+        assert!(total_stone > 0, "no stone at all");
+        assert!(total_stone < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE, "fully solid");
+
+        // A chunk at a different position must sample different terrain —
+        // identical counts would mean the noise is being tiled per chunk.
+        let other_chunk = test_chunk(Vec3::new(16.0, 32.0, 0.0));
+        let other_plane = CurvedBasePlane::compute_for_chunk(&other_chunk);
+        let other_blocks = MeshGenerator::fill_blocks(&other_plane, &generator, &other_chunk);
+        let other_total: usize = (0..CHUNK_SIZE).map(|z| stone_count_at_layer(&other_blocks, z)).sum();
+        assert_ne!(total_stone, other_total, "identical stone counts — terrain is tiled per chunk");
     }
 }

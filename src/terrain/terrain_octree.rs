@@ -1,4 +1,4 @@
-use crate::terrain::chunk::{Blocks, Chunk};
+use crate::terrain::chunk::Chunk;
 use crate::terrain::octree::{Octant, Octree, Splittable};
 use crate::terrain::Face;
 use bevy::prelude::*;

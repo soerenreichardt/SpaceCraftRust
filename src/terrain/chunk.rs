@@ -28,13 +28,14 @@ impl Default for Blocks {
 }
 
 impl Blocks {
-    fn stone() -> Self {
-        Blocks {
-            blocks: [BlockType::Stone; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
-        }
-    }
-
     pub fn set(&mut self, block: BlockType, x: usize, y: usize, z: usize) {
         self.blocks[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x] = block;
+    }
+
+    // Not consumed by the mesh path yet; used by the fill_blocks tests and
+    // future block queries.
+    #[allow(dead_code)]
+    pub fn get(&self, x: usize, y: usize, z: usize) -> BlockType {
+        self.blocks[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x]
     }
 }

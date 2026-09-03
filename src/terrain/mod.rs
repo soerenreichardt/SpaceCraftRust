@@ -8,7 +8,7 @@ mod block;
 pub(crate) mod mesh;
 mod generate;
 
-pub const CHUNK_SIZE: usize = 32;
+pub const CHUNK_SIZE: usize = 16;
 
 #[derive(Clone, Debug)]
 pub(crate) enum Face {
