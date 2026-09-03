@@ -14,6 +14,171 @@
 //!   `-1`-terminated — the canonical resolution of the ambiguous cases,
 //!   used identically everywhere. Never case-adjust per chunk.
 
+use crate::terrain::chunk::Chunk;
+use crate::terrain::generate::{face_owns_cell, FaceGrid, TerrainGenerator};
+use crate::terrain::terrain_octree::DimensionRange;
+use crate::terrain::CHUNK_SIZE;
+
+/// Sample-grid width: a chunk's 32³ blocks plus the +1 positive ring
+/// (index 32 = the neighbor's block 0).
+const VIEW_SIZE: usize = CHUNK_SIZE + 1;
+
+/// Solidity of a chunk's 33³ sample grid — the chunk's own blocks plus the
+/// +1 positive ring on x/y/z, every sample straight from the generator (a
+/// pure function of lattice coordinates, never read from neighbor
+/// entities, which don't survive merges). Same predicate as `fill_blocks`
+/// (pinned by a test).
+pub(crate) struct OccupancyView {
+    solid: Vec<bool>,
+}
+
+impl OccupancyView {
+    pub(crate) fn build(generator: &TerrainGenerator, grid: &FaceGrid, chunk: &Chunk) -> Self {
+        let face = chunk.face.clone();
+        let x_range = chunk.range.x(face.clone());
+        let y_range = chunk.range.y(face.clone());
+        let z_range = chunk.range.z(face);
+        let step = |r: &DimensionRange| (r.1 - r.0) as f64 / CHUNK_SIZE as f64;
+        let (step_x, step_y, step_z) = (step(x_range), step(y_range), step(z_range));
+        let (x0, y0, z0) = (x_range.0 as f64, y_range.0 as f64, z_range.0 as f64);
+
+        let mut solid = vec![false; VIEW_SIZE * VIEW_SIZE * VIEW_SIZE];
+        for k in 0..VIEW_SIZE {
+            let gz = z0 + k as f64 * step_z;
+            for j in 0..VIEW_SIZE {
+                let gy = y0 + j as f64 * step_y;
+                for i in 0..VIEW_SIZE {
+                    let gx = x0 + i as f64 * step_x;
+                    solid[VIEW_SIZE * (VIEW_SIZE * k + j) + i] =
+                        generator.is_solid_at(grid, gx, gy, gz);
+                }
+            }
+        }
+        OccupancyView { solid }
+    }
+
+    #[inline]
+    fn solid(&self, i: usize, j: usize, k: usize) -> bool {
+        self.solid[VIEW_SIZE * (VIEW_SIZE * k + j) + i]
+    }
+
+    /// Test constructor.
+    #[cfg(test)]
+    fn from_fn(f: impl Fn(usize, usize, usize) -> bool) -> Self {
+        let mut solid = vec![false; VIEW_SIZE * VIEW_SIZE * VIEW_SIZE];
+        for k in 0..VIEW_SIZE {
+            for j in 0..VIEW_SIZE {
+                for i in 0..VIEW_SIZE {
+                    solid[VIEW_SIZE * (VIEW_SIZE * k + j) + i] = f(i, j, k);
+                }
+            }
+        }
+        OccupancyView { solid }
+    }
+}
+
+/// Reusable marching-cubes output for one chunk. `clear()` between chunks;
+/// held in the `MeshGenerator` resource.
+#[derive(Default)]
+pub(crate) struct McOutput {
+    /// Chunk-local vertex positions — flat crossing positions, center
+    /// subtracted. Never sphere-projected (that would flatten mountains).
+    pub(crate) positions: Vec<[f32; 3]>,
+    pub(crate) indices: Vec<u32>,
+}
+
+impl McOutput {
+    pub(crate) fn clear(&mut self) {
+        self.positions.clear();
+        self.indices.clear();
+    }
+}
+
+/// Meshes a chunk's 32³ cells (min-corner ownership: every cell whose
+/// minimum corner is one of the chunk's own blocks). Cells whose min corner
+/// lies in another face's angular pyramid are skipped — that face's chunk
+/// meshes them (mesh-exactly-once; cross-face agreement comes from the
+/// shared world lattice and the point-canonical density). Boundary cells
+/// read the +1 ring from the view. Crossings sit at the **midpoint** of the
+/// two corners (binary occupancy — height quantizes to half a block step).
+pub(crate) fn marching_cubes(
+    view: &OccupancyView,
+    grid: &FaceGrid,
+    chunk: &Chunk,
+    out: &mut McOutput,
+) {
+    let face = chunk.face.clone();
+    let x_range = chunk.range.x(face.clone());
+    let y_range = chunk.range.y(face.clone());
+    let z_range = chunk.range.z(face.clone());
+    let step = |r: &DimensionRange| (r.1 - r.0) as f64 / CHUNK_SIZE as f64;
+    let (step_x, step_y, step_z) = (step(x_range), step(y_range), step(z_range));
+    let (x0, y0, z0) = (x_range.0 as f64, y_range.0 as f64, z_range.0 as f64);
+    let center = chunk.center.as_dvec3();
+
+    // Bourke's table winds triangle normals INTO the solid. The four
+    // left-handed face frames are reflections, which already flips their
+    // orientation — so reversing the RIGHT-handed frames gives every face
+    // outward normals. Same rule as the base plane's flip.
+    let flip = !grid.is_left_handed();
+
+    for k in 0..CHUNK_SIZE {
+        let gz = z0 + k as f64 * step_z;
+        for j in 0..CHUNK_SIZE {
+            let gy = y0 + j as f64 * step_y;
+            for i in 0..CHUNK_SIZE {
+                let gx = x0 + i as f64 * step_x;
+
+                // Ownership gate: another face's pyramid → their cell.
+                if !face_owns_cell(grid, &face, gx, gy, gz) {
+                    continue;
+                }
+
+                let mut case = 0u8;
+                for (c, &[ox, oy, oz]) in CORNER_OFFSETS.iter().enumerate() {
+                    if view.solid(i + ox as usize, j + oy as usize, k + oz as usize) {
+                        case |= 1 << c;
+                    }
+                }
+                if case == 0 || case == 255 {
+                    continue; // no-mix fast path
+                }
+
+                let row = &TRI_TABLE[case as usize];
+                let edge_count = row.iter().position(|&v| v == -1).unwrap();
+                // Per-cell vertex slots (one vertex per crossed edge).
+                let mut slots = [u32::MAX; 12];
+                for t in 0..edge_count / 3 {
+                    let tri = [
+                        row[t * 3] as usize,
+                        row[t * 3 + 1] as usize,
+                        row[t * 3 + 2] as usize,
+                    ];
+                    let order = if flip {
+                        [tri[0], tri[2], tri[1]]
+                    } else {
+                        [tri[0], tri[1], tri[2]]
+                    };
+                    for &e in &order {
+                        if slots[e] == u32::MAX {
+                            let [ca, cb] = EDGE_CORNERS[e];
+                            let [ax, ay, az] = CORNER_OFFSETS[ca as usize];
+                            let [bx, by, bz] = CORNER_OFFSETS[cb as usize];
+                            let m_gx = gx + (ax + bx) as f64 * step_x * 0.5;
+                            let m_gy = gy + (ay + by) as f64 * step_y * 0.5;
+                            let m_gz = gz + (az + bz) as f64 * step_z * 0.5;
+                            let p = grid.position(m_gx, m_gy, m_gz) - center;
+                            slots[e] = out.positions.len() as u32;
+                            out.positions.push([p.x as f32, p.y as f32, p.z as f32]);
+                        }
+                        out.indices.push(slots[e]);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Cell-local corner positions in `(e1, e2, e3)` unit coordinates.
 pub(crate) const CORNER_OFFSETS: [[u8; 3]; 8] = [
     [0, 0, 0], // corner 0
@@ -405,6 +570,230 @@ mod tests {
                     assert!(
                         (mask >> edge) & 1 == 1,
                         "case {case}: triangle uses uncrossed edge {edge}"
+                    );
+                }
+            }
+        }
+    }
+
+    // ---- mesher tests ----
+
+    use crate::terrain::chunk::Blocks;
+    use crate::terrain::generate::fill_blocks;
+    use crate::terrain::terrain_octree::NodeRange;
+    use bevy::math::DVec3;
+    use bevy::prelude::Entity;
+
+    /// A chunk around hand-chosen face-remapped lattice ranges (gx, gy, gz
+    /// windows), with raw stores, center, and length consistent with the
+    /// face's accessor mapping.
+    fn chunk_at(
+        face: &crate::terrain::Face,
+        scale: f32,
+        gx: (u32, u32),
+        gy: (u32, u32),
+        gz: (u32, u32),
+    ) -> Chunk {
+        // Raw (x, y, z) stores from the face-remapped windows, per the
+        // NodeRange accessor mapping.
+        let (xs, ys, zs) = match face {
+            crate::terrain::Face::Front | crate::terrain::Face::Back => (gx, gy, gz),
+            crate::terrain::Face::Top | crate::terrain::Face::Bottom => (gx, gz, gy),
+            crate::terrain::Face::Left | crate::terrain::Face::Right => (gz, gy, gx),
+        };
+        let grid = FaceGrid::new(face, scale);
+        let mid = |r: (u32, u32)| (r.0 + r.1) as f64 / 2.0;
+        let center = grid.position(mid(gx), mid(gy), mid(gz));
+        Chunk {
+            parent: None,
+            planet: Entity::PLACEHOLDER,
+            center: center.as_vec3(),
+            face: face.clone(),
+            length: (gx.1 - gx.0) as f32,
+            scale,
+            blocks: None,
+            range: NodeRange::from_ranges(
+                DimensionRange(xs.0, xs.1),
+                DimensionRange(ys.0, ys.1),
+                DimensionRange(zs.0, zs.1),
+            ),
+        }
+    }
+
+    /// A small Front chunk well inside Front's pyramid: world box
+    /// x,y ∈ [−64, −32], z ∈ [224, 256] — every cell is Front-owned.
+    fn front_chunk() -> Chunk {
+        chunk_at(
+            &crate::terrain::Face::Front,
+            256.0,
+            (192, 224),
+            (192, 224),
+            (224, 256),
+        )
+    }
+
+    fn world_box(chunk: &Chunk) -> (DVec3, DVec3) {
+        let c = chunk.center.as_dvec3();
+        let h = (chunk.length as f64) / 2.0;
+        (c - DVec3::splat(h), c + DVec3::splat(h))
+    }
+
+    fn all_positions_inside(chunk: &Chunk, out: &McOutput) {
+        let (min, max) = world_box(chunk);
+        for p in &out.positions {
+            let p = DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64) + chunk.center.as_dvec3();
+            assert!(
+                p.cmplt(max + DVec3::splat(1e-4)).all() && p.cmpgt(min - DVec3::splat(1e-4)).all(),
+                "vertex {p:?} outside the chunk box {min:?}..{max:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn uniform_views_produce_nothing() {
+        let chunk = front_chunk();
+        let grid = FaceGrid::new(&chunk.face, 256.0);
+        for solid in [false, true] {
+            let view = OccupancyView::from_fn(|_, _, _| solid);
+            let mut out = McOutput::default();
+            marching_cubes(&view, &grid, &chunk, &mut out);
+            assert!(out.indices.is_empty(), "solid = {solid}");
+        }
+    }
+
+    #[test]
+    fn single_solid_point_cuts_eight_triangles() {
+        // Root-level Front chunk (step 16); one solid sample at lattice
+        // (272, 272, 272) — world (16, 16, 272), inside Front's pyramid.
+        let chunk = chunk_at(
+            &crate::terrain::Face::Front,
+            256.0,
+            (0, 512),
+            (0, 512),
+            (0, 512),
+        );
+        let grid = FaceGrid::new(&chunk.face, 256.0);
+        let view = OccupancyView::from_fn(|i, j, k| (i, j, k) == (17, 17, 17));
+        let mut out = McOutput::default();
+        marching_cubes(&view, &grid, &chunk, &mut out);
+        // The 8 cells around the point each cut exactly one triangle.
+        assert_eq!(out.indices.len() / 3, 8);
+        assert_eq!(out.positions.len(), 24); // 3 distinct vertices per cell, no sharing
+        all_positions_inside(&chunk, &out);
+    }
+
+    /// One triangle's world-space normal from the output buffers.
+    fn triangle_normal(chunk: &Chunk, out: &McOutput, t: usize) -> DVec3 {
+        let v = |i: usize| {
+            let p = out.positions[out.indices[t * 3 + i] as usize];
+            DVec3::new(p[0] as f64, p[1] as f64, p[2] as f64) + chunk.center.as_dvec3()
+        };
+        let (a, b, c) = (v(0), v(1), v(2));
+        (b - a).cross(c - a)
+    }
+
+    #[test]
+    fn plane_sheet_on_right_handed_face() {
+        // Front (right-handed): solid below world z = 240 → crossing between
+        // samples z=239 and z=240 → midpoint plane z = 239.5. All 32×32
+        // cells at the k=15 row are mixed → 1024 cells × 2 triangles.
+        let chunk = front_chunk();
+        let grid = FaceGrid::new(&chunk.face, 256.0);
+        // world z = 224 + k (step 1); solid iff z < 240 → k < 16.
+        let view = OccupancyView::from_fn(|_i, _j, k| k < 16);
+        let mut out = McOutput::default();
+        marching_cubes(&view, &grid, &chunk, &mut out);
+
+        assert_eq!(out.indices.len() / 3, 2 * 32 * 32);
+        all_positions_inside(&chunk, &out);
+        // Every vertex lies on the midpoint plane, chunk-local z = −0.5.
+        for p in &out.positions {
+            assert!((p[2] + 0.5).abs() < 1e-4, "vertex off the plane: {p:?}");
+        }
+        // Normals point out of the solid (upward, +z) after the winding fix.
+        for t in 0..out.indices.len() / 3 {
+            assert!(
+                triangle_normal(&chunk, &out, t).z > 0.0,
+                "triangle {t} normal points into the solid"
+            );
+        }
+    }
+
+    #[test]
+    fn plane_sheet_on_left_handed_face() {
+        // Top (left-handed frame): same sheet through world y = 239.5.
+        // Top's lattice: world = (gx−S, gz, gy−S), so the face-remapped
+        // ranges are x: world x, y: world z, z: world y (radial).
+        let chunk = chunk_at(
+            &crate::terrain::Face::Top,
+            256.0,
+            (192, 224), // world x ∈ [−64, −32]
+            (192, 224), // world z ∈ [−64, −32]
+            (224, 256), // world y ∈ [224, 256]
+        );
+        let grid = FaceGrid::new(&chunk.face, 256.0);
+        // world y = 224 + k (gz = 224 + k); solid iff y < 240 → k < 16.
+        let view = OccupancyView::from_fn(|_i, _j, k| k < 16);
+        let mut out = McOutput::default();
+        marching_cubes(&view, &grid, &chunk, &mut out);
+
+        assert_eq!(out.indices.len() / 3, 2 * 32 * 32);
+        all_positions_inside(&chunk, &out);
+        for p in &out.positions {
+            assert!((p[1] + 0.5).abs() < 1e-4, "vertex off the plane: {p:?}");
+        }
+        for t in 0..out.indices.len() / 3 {
+            assert!(
+                triangle_normal(&chunk, &out, t).y > 0.0,
+                "triangle {t} normal points into the solid"
+            );
+        }
+    }
+
+    #[test]
+    fn ownership_gate_skips_foreign_cells() {
+        // Front chunk pushed to the +x edge: world x ∈ [224, 256], z ∈
+        // [224, 256]. At the mixed row (min corner z = 239), Front owns a
+        // cell iff z > x (ties go to the higher-priority X axis → Right),
+        // so x ≤ 238 → the first 15 i-columns only; the rest belong to
+        // Right's pyramid and must be skipped: 15·32·2 triangles instead
+        // of 32·32·2.
+        let chunk = chunk_at(
+            &crate::terrain::Face::Front,
+            256.0,
+            (480, 512),
+            (192, 224),
+            (224, 256),
+        );
+        let grid = FaceGrid::new(&chunk.face, 256.0);
+        let view = OccupancyView::from_fn(|_i, _j, k| k < 16);
+        let mut out = McOutput::default();
+        marching_cubes(&view, &grid, &chunk, &mut out);
+        assert_eq!(out.indices.len() / 3, 2 * 15 * 32);
+    }
+
+    #[test]
+    fn view_matches_fill_predicate() {
+        use crate::terrain::generate::TerrainGenerator;
+        let scale = 256.0f32;
+        let gen = TerrainGenerator::new(scale, 3);
+        let chunk = chunk_at(
+            &crate::terrain::Face::Front,
+            scale,
+            (0, 512),
+            (0, 512),
+            (0, 512),
+        );
+        let grid = FaceGrid::new(&chunk.face, scale);
+        let view = OccupancyView::build(&gen, &grid, &chunk);
+        let blocks: Blocks = fill_blocks(&gen, &grid, &chunk);
+        for k in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for i in 0..CHUNK_SIZE {
+                    assert_eq!(
+                        view.solid(i, j, k),
+                        blocks.is_solid(i, j, k),
+                        "view/fill disagree at ({i}, {j}, {k})"
                     );
                 }
             }
