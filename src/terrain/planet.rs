@@ -1,6 +1,7 @@
 use crate::camera::MainCamera;
 use crate::terrain::Face;
 use bevy::prelude::*;
+use crate::terrain::generate::TerrainGenerator;
 use crate::terrain::terrain_octree::{RemoveTerrainChildren, TerrainOctree};
 
 type PlanetSide = TerrainOctree;
@@ -8,19 +9,21 @@ type PlanetSide = TerrainOctree;
 #[derive(Component)]
 pub(crate) struct Planet {
     planet_sides: [PlanetSide; 6],
+    pub(crate) terrain_generator: TerrainGenerator
 }
 
 impl Planet {
-    pub(crate) fn new(size: u8, scale: f32, commands: &mut Commands) -> Self {
+    pub(crate) fn new(size: u8, scale: f32, planet_entity: Entity, commands: &mut Commands) -> Self {
         Planet {
             planet_sides: [
-                PlanetSide::new(size, scale, Face::Back, commands),
-                PlanetSide::new(size, scale, Face::Front, commands),
-                PlanetSide::new(size, scale, Face::Left, commands),
-                PlanetSide::new(size, scale, Face::Right, commands),
-                PlanetSide::new(size, scale, Face::Top, commands),
-                PlanetSide::new(size, scale, Face::Bottom, commands),
-            ]
+                PlanetSide::new(size, scale, Face::Back, planet_entity, commands),
+                PlanetSide::new(size, scale, Face::Front, planet_entity, commands),
+                PlanetSide::new(size, scale, Face::Left, planet_entity, commands),
+                PlanetSide::new(size, scale, Face::Right, planet_entity, commands),
+                PlanetSide::new(size, scale, Face::Top, planet_entity, commands),
+                PlanetSide::new(size, scale, Face::Bottom, planet_entity, commands),
+            ],
+            terrain_generator: TerrainGenerator::new(scale, 0)
         }
     }
 }

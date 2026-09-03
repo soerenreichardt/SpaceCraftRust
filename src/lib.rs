@@ -43,8 +43,9 @@ impl SpaceCraftPlugin {
             MainCamera
         ));
 
-        let planet = Planet::new(radius, scale, &mut commands);
-        commands.spawn(planet);
+        let planet_entity = commands.spawn_empty().id();
+        let planet = Planet::new(radius, scale, planet_entity, &mut commands);
+        commands.entity(planet_entity).insert(planet);
         commands.spawn((
             DirectionalLight { ..default() },
             Transform::from_translation(Vec3::new(15.0, 15.0, 15.0)),

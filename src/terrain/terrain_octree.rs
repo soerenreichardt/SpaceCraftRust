@@ -13,6 +13,7 @@ pub(crate) struct TerrainOctreeNode {
     length: f32,
     scale: f32,
     entity: Entity,
+    planet_entity: Entity,
     range: NodeRange,
 }
 
@@ -41,6 +42,7 @@ impl Splittable for TerrainOctreeNode {
                 face: self.face.clone(),
                 length,
                 scale: self.scale,
+                planet_entity: self.planet_entity,
                 blocks: None,
                 range: range.clone(),
             },
@@ -56,6 +58,7 @@ impl Splittable for TerrainOctreeNode {
             length,
             scale: self.scale,
             entity,
+            planet_entity: self.planet_entity,
             range,
         }
     }
@@ -97,7 +100,7 @@ impl Octree<TerrainOctreeNode> {
 }
 
 impl TerrainOctree {
-    pub fn new(depth: u8, scale: f32, face: Face, commands: &mut Commands) -> Self {
+    pub fn new(depth: u8, scale: f32, face: Face, planet_entity: Entity, commands: &mut Commands) -> Self {
         let length = 2.0 * scale;
         let center = face.direction_vector() * scale;
         let range = NodeRange::from_scale(scale);
@@ -108,6 +111,7 @@ impl TerrainOctree {
                 face: face.clone(),
                 length,
                 scale,
+                planet_entity,
                 blocks: None,
                 range: range.clone(),
             },
@@ -120,6 +124,7 @@ impl TerrainOctree {
             length,
             scale,
             entity: entity_commands.id(),
+            planet_entity,
             range,
         };
         TerrainOctree {

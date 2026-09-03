@@ -5,7 +5,7 @@ use bevy::math::DVec3;
 use bevy::prelude::*;
 
 pub struct CurvedBasePlane {
-    vertices: Vec<[f32; 3]>,
+    pub(crate) vertices: Vec<[f32; 3]>,
     colors: Vec<[f32; 4]>,
 }
 
@@ -51,6 +51,11 @@ impl CurvedBasePlane {
 
     pub fn data(self) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {
         (self.vertices, self.colors)
+    }
+
+    pub fn vertex_at(&self, x: usize, y: usize) -> DVec3 {
+        let values = self.vertices[y * (MESH_SIZE + 1) + x];
+        Vec3::from(values).into()
     }
 }
 

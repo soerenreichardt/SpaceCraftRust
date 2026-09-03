@@ -6,6 +6,7 @@ mod octree;
 mod chunk;
 mod block;
 pub(crate) mod mesh;
+mod generate;
 
 pub const CHUNK_SIZE: usize = 32;
 

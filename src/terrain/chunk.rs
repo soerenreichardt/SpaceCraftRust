@@ -10,6 +10,7 @@ pub struct Chunk {
     pub(crate) face: Face,
     pub(crate) length: f32,
     pub(crate) scale: f32,
+    pub(crate) planet_entity: Entity,
     pub(crate) blocks: Option<Blocks>,
     pub(crate) range: NodeRange,
 }
@@ -31,5 +32,9 @@ impl Blocks {
         Blocks {
             blocks: [BlockType::Stone; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
         }
+    }
+
+    pub fn set(&mut self, block: BlockType, x: usize, y: usize, z: usize) {
+        self.blocks[z * CHUNK_SIZE * CHUNK_SIZE + y * CHUNK_SIZE + x] = block;
     }
 }
