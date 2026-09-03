@@ -1,7 +1,8 @@
 use crate::terrain::chunk::Chunk;
-use crate::terrain::generate::FaceGrid;
+use crate::terrain::generate::{debug_ascii_slice, fill_blocks, FaceGrid, DEBUG_FILL_SLICE};
 use crate::terrain::mesh::base_plane::CurvedBasePlane;
-use crate::terrain::terrain_octree::{DimensionRange, RemoveTerrainChildren};
+use crate::terrain::planet::Planet;
+use crate::terrain::terrain_octree::RemoveTerrainChildren;
 use bevy::pbr::wireframe::Wireframe;
 use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
@@ -11,13 +12,27 @@ pub(crate) const MESH_SIZE: usize = 16;
 
 pub fn generate_chunk_meshes(
     mut commands: Commands,
-    query: Query<(Entity, &Chunk), Added<Chunk>>,
+    mut query: Query<(Entity, &mut Chunk), Added<Chunk>>,
+    planets: Query<&Planet>,
     mut parents_query: Query<&mut Visibility>,
     mesh_generator: Res<MeshGenerator>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut slice_logged: Local<bool>,
 ) {
-    for (entity, chunk) in query.iter() {
+    for (entity, mut chunk) in query.iter_mut() {
+        // Populate the chunk's blocks from its planet's terrain signature.
+        if let Ok(planet) = planets.get(chunk.planet) {
+            let grid = FaceGrid::new(&chunk.face, chunk.scale);
+            if DEBUG_FILL_SLICE && !*slice_logged
+                && planet.terrain_generator.chunk_intersects_surface(&chunk)
+            {
+                *slice_logged = true;
+                debug_ascii_slice(&planet.terrain_generator, &grid, &chunk);
+            }
+            chunk.blocks = Some(fill_blocks(&planet.terrain_generator, &grid, &chunk));
+        }
+
         let scale = chunk.scale as u32;
         let radial = chunk.range.z(chunk.face.clone());
         let is_root = radial.0 == 0 && radial.1 == 2 * scale;
@@ -26,7 +41,7 @@ pub fn generate_chunk_meshes(
             commands.entity(entity).insert(Visibility::Visible);
             continue;
         }
-        let render_bundle = mesh_generator.compute_mesh(chunk, &mut meshes, &mut materials);
+        let render_bundle = mesh_generator.compute_mesh(&chunk, &mut meshes, &mut materials);
         commands.entity(entity).insert(render_bundle);
 
         if let Some(parent) = chunk.parent {

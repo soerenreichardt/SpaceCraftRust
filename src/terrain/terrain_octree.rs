@@ -175,6 +175,12 @@ impl NodeRange {
         }
     }
 
+    /// Test helper: build a range directly from its per-axis windows.
+    #[cfg(test)]
+    pub(crate) fn from_ranges(x: DimensionRange, y: DimensionRange, z: DimensionRange) -> Self {
+        NodeRange { x, y, z }
+    }
+
     pub(crate) fn split(&self, octant: Octant) -> Self {
         match octant {
             Octant::TopLeftFront => NodeRange {

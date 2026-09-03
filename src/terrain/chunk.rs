@@ -31,9 +31,26 @@ impl Default for Blocks {
 }
 
 impl Blocks {
-    fn stone() -> Self {
+    pub(crate) fn stone() -> Self {
         Blocks {
             blocks: [BlockType::Stone; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE],
         }
+    }
+
+    pub(crate) fn from_blocks(blocks: [BlockType; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE]) -> Self {
+        Blocks { blocks }
+    }
+
+    #[inline]
+    fn index(i: usize, j: usize, k: usize) -> usize {
+        i + CHUNK_SIZE * (j + CHUNK_SIZE * k)
+    }
+
+    pub(crate) fn get(&self, i: usize, j: usize, k: usize) -> BlockType {
+        self.blocks[Self::index(i, j, k)]
+    }
+
+    pub(crate) fn is_solid(&self, i: usize, j: usize, k: usize) -> bool {
+        self.get(i, j, k) != BlockType::Air
     }
 }

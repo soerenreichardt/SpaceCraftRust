@@ -1,4 +1,7 @@
-use crate::terrain::Face;
+use crate::terrain::block::BlockType;
+use crate::terrain::chunk::{Blocks, Chunk};
+use crate::terrain::terrain_octree::DimensionRange;
+use crate::terrain::{Face, CHUNK_SIZE};
 use bevy::math::DVec3;
 use bevy::prelude::Vec3;
 use noiz::prelude::common_noise::{Fbm, Simplex};
@@ -50,13 +53,23 @@ impl FaceGrid {
     /// midpoint `(scale, scale, scale)` maps to the face-plane center;
     /// `gz = scale` lies on the face plane for every face, and whether
     /// increasing gz points outward or inward depends on the face (outward
-    /// for Top/Right/Back, inward for Bottom/Left/Front).
+    /// for Front/Top/Right — the positive-normal faces — inward for
+    /// Back/Bottom/Left).
     pub(crate) fn position(&self, gx: f64, gy: f64, gz: f64) -> DVec3 {
         let s = self.scale;
         self.origin
             + self.e1 * (gx - s)
             + self.e2 * (gy - s)
             + self.e3 * (gz - s)
+    }
+
+    /// Whether increasing gz points away from the planet. True on the
+    /// positive-normal faces (Front/Top/Right); on Back/Bottom/Left the
+    /// lattice's gz runs from the far outside toward the center plane.
+    /// Derived from the frame itself: the radial axis dotted with the face
+    /// normal (the direction of `origin`).
+    pub(crate) fn gz_points_outward(&self) -> bool {
+        self.e3.dot(self.origin) > 0.0
     }
 
     /// Cube→sphere projection — **flat-tier-only** (bends `CurvedBasePlane`'s
@@ -92,6 +105,11 @@ const FEATURES_PER_RADIUS: f32 = 4.0;
 /// sees a non-uniform shell) and below `(√2−1)·scale ≈ 0.41` (the coverage
 /// bound for peaks near cube edges — see the plan).
 const AMPLITUDE_FRACTION: f32 = 0.1;
+/// Safety margin on the fbm bound for the shell shortcut and band test:
+/// points further than `amplitude · SHELL_MARGIN` from sea level cannot
+/// cross the surface (fbm output ≈ [−1, 1]; the margin covers any marginal
+/// simplex overshoot).
+const SHELL_MARGIN: f64 = 1.1;
 
 /// Per-planet terrain signature: a seeded fbm, sea level, and displacement
 /// amplitude. Owned by the `Planet` component — one per planet, since every
@@ -106,6 +124,12 @@ pub(crate) struct TerrainGenerator {
 
 impl TerrainGenerator {
     pub(crate) fn new(scale: f32, seed: u32) -> Self {
+        Self::with_amplitude(scale, seed, AMPLITUDE_FRACTION)
+    }
+
+    /// Constructor with an explicit amplitude fraction (`0.0` = perfect
+    /// sphere) — tuning and tests.
+    pub(crate) fn with_amplitude(scale: f32, seed: u32, amplitude_fraction: f32) -> Self {
         let mut noise: Noise<TerrainFbm> = LayeredNoise::new(
             Normed::<f32>::default(),
             Persistence(0.5),
@@ -124,7 +148,7 @@ impl TerrainGenerator {
         TerrainGenerator {
             noise,
             sea_level: scale as f64,
-            amplitude: (AMPLITUDE_FRACTION * scale) as f64,
+            amplitude: (amplitude_fraction * scale) as f64,
         }
     }
 
@@ -140,6 +164,167 @@ impl TerrainGenerator {
             self.noise.sample_for::<f32>(Vec3::new(p.x as f32, p.y as f32, p.z as f32)) as f64;
         self.amplitude * fbm - (p.length() - self.sea_level)
     }
+
+    /// Signed density at a lattice point, or `None` when the point lies
+    /// beyond the fbm's reach (`| |p| − sea_level | > amplitude·SHELL_MARGIN`)
+    /// — then solidity follows from the distance alone and no noise is
+    /// evaluated. `Some` results feed MC interpolation later.
+    pub(crate) fn point_density(
+        &self,
+        grid: &FaceGrid,
+        gx: f64,
+        gy: f64,
+        gz: f64,
+    ) -> Option<f64> {
+        let p = grid.position(gx, gy, gz);
+        let d = p.length() - self.sea_level;
+        if d.abs() > self.amplitude * SHELL_MARGIN {
+            return None;
+        }
+        Some(self.density(p))
+    }
+
+    /// Whether the block at a lattice point is solid — a pure function of
+    /// the lattice point and the planet's signature, so any face evaluating
+    /// a shared point gets the same answer (the border-alignment guarantee).
+    pub(crate) fn is_solid_at(&self, grid: &FaceGrid, gx: f64, gy: f64, gz: f64) -> bool {
+        let p = grid.position(gx, gy, gz);
+        let d = p.length() - self.sea_level;
+        if d.abs() > self.amplitude * SHELL_MARGIN {
+            return d < 0.0;
+        }
+        self.density(p) > 0.0
+    }
+
+    /// Whether the chunk's flat box can intersect the terrain band
+    /// `[sea_level − amp·SHELL_MARGIN, sea_level + amp·SHELL_MARGIN]`.
+    /// Uses the exact min/max of `|p|` over the chunk's axis-aligned box —
+    /// the distance from the origin to the box, and the farthest corner.
+    /// (Corner *sampling* would be wrong: `|p|` is convex, so its minimum
+    /// need not be at a corner — the root cube's corners all sit outside the
+    /// band while it contains the whole planet.)
+    pub(crate) fn chunk_intersects_surface(&self, chunk: &Chunk) -> bool {
+        matches!(self.band_class(chunk), BandClass::Band)
+    }
+
+    fn band_class(&self, chunk: &Chunk) -> BandClass {
+        let c = chunk.center.as_dvec3();
+        let h = chunk.length as f64 / 2.0;
+        let band = self.amplitude * SHELL_MARGIN;
+        // Exact closest approach of the box to the origin (0 if inside).
+        let min_r = DVec3::new(
+            (c.x.abs() - h).max(0.0),
+            (c.y.abs() - h).max(0.0),
+            (c.z.abs() - h).max(0.0),
+        )
+        .length();
+        // Exact farthest point: align corner signs with the center.
+        let max_r = (c.abs() + DVec3::splat(h)).length();
+        if min_r >= self.sea_level + band {
+            BandClass::Outside
+        } else if max_r <= self.sea_level - band {
+            BandClass::Inside
+        } else {
+            BandClass::Band
+        }
+    }
+}
+
+/// Radial classification of a chunk relative to the terrain band.
+enum BandClass {
+    /// Entirely outside the band — all air.
+    Outside,
+    /// Entirely inside the band's floor — all solid.
+    Inside,
+    /// Possibly intersects the surface — needs per-voxel sampling.
+    Band,
+}
+
+/// Fills a chunk's `Blocks` from the density field. Per (i, j) column, walk
+/// gz from the outside in: the first (outermost) solid block gets `Grass`,
+/// solids below it `Stone`, air stays `Air` — cave pockets interior to the
+/// column get `Stone` ceilings (accepted for now). Off-band chunks fill
+/// uniformly with zero noise evaluations.
+pub(crate) fn fill_blocks(generator: &TerrainGenerator, grid: &FaceGrid, chunk: &Chunk) -> Blocks {
+    match generator.band_class(chunk) {
+        BandClass::Outside => Blocks::default(),
+        BandClass::Inside => Blocks::stone(),
+        BandClass::Band => {
+            let face = chunk.face.clone();
+            let x_range = chunk.range.x(face.clone());
+            let y_range = chunk.range.y(face.clone());
+            let z_range = chunk.range.z(face);
+            let step = |r: &DimensionRange| (r.1 - r.0) as f64 / CHUNK_SIZE as f64;
+            let (step_x, step_y, step_z) = (step(x_range), step(y_range), step(z_range));
+            let (x0, y0, z0) = (x_range.0 as f64, y_range.0 as f64, z_range.0 as f64);
+
+            let mut blocks = [BlockType::Air; CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
+            let outward = grid.gz_points_outward();
+            for i in 0..CHUNK_SIZE {
+                let gx = x0 + i as f64 * step_x;
+                for j in 0..CHUNK_SIZE {
+                    let gy = y0 + j as f64 * step_y;
+                    let mut solids = [false; CHUNK_SIZE];
+                    for (k, solid) in solids.iter_mut().enumerate() {
+                        let gz = z0 + k as f64 * step_z;
+                        *solid = generator.is_solid_at(grid, gx, gy, gz);
+                    }
+                    // The outermost solid block is the surface block.
+                    let surface_k = if outward {
+                        solids.iter().rposition(|&s| s)
+                    } else {
+                        solids.iter().position(|&s| s)
+                    };
+                    if let Some(surface_k) = surface_k {
+                        for k in 0..CHUNK_SIZE {
+                            if solids[k] {
+                                blocks[CHUNK_SIZE * (CHUNK_SIZE * k + j) + i] = if k == surface_k {
+                                    BlockType::Grass
+                                } else {
+                                    BlockType::Stone
+                                };
+                            }
+                        }
+                    }
+                }
+            }
+            Blocks::from_blocks(blocks)
+        }
+    }
+}
+
+/// Temporary: log one ASCII slice (solid `#` / air `.`) of the first
+/// band-filled chunk — rows gz outward → inward, columns gx, at gy's middle
+/// column. Expect solid interior, air exterior, a noisy transition row.
+pub(crate) const DEBUG_FILL_SLICE: bool = true;
+
+pub(crate) fn debug_ascii_slice(generator: &TerrainGenerator, grid: &FaceGrid, chunk: &Chunk) {
+    use bevy::prelude::info;
+    let face = chunk.face.clone();
+    let x_range = chunk.range.x(face.clone());
+    let y_range = chunk.range.y(face.clone());
+    let z_range = chunk.range.z(face);
+    let step = |r: &DimensionRange| (r.1 - r.0) as f64 / CHUNK_SIZE as f64;
+    let (step_x, step_y, step_z) = (step(x_range), step(y_range), step(z_range));
+    let (x0, y0, z0) = (x_range.0 as f64, y_range.0 as f64, z_range.0 as f64);
+
+    let gy = y0 + (CHUNK_SIZE / 2) as f64 * step_y;
+    let mut ks: Vec<usize> = (0..CHUNK_SIZE).collect();
+    if grid.gz_points_outward() {
+        ks.reverse();
+    }
+    let mut out = String::from("DEBUG fill slice (rows: outward → inward):");
+    for k in ks {
+        let gz = z0 + k as f64 * step_z;
+        let mut row = String::with_capacity(CHUNK_SIZE);
+        for i in 0..CHUNK_SIZE {
+            let gx = x0 + i as f64 * step_x;
+            row.push(if generator.is_solid_at(grid, gx, gy, gz) { '#' } else { '.' });
+        }
+        out.push('\n');
+        out.push_str(&row);
+    }
+    info!("{out}");
 }
 
 #[cfg(test)]
@@ -147,6 +332,7 @@ mod tests {
     use super::*;
     use crate::terrain::octree::Octant;
     use crate::terrain::terrain_octree::{DimensionRange, NodeRange};
+    use bevy::prelude::Entity;
 
     fn octants() -> [Octant; 8] {
         [
@@ -304,5 +490,212 @@ mod tests {
                 2.0 * d_small
             );
         }
+    }
+
+    /// Finding 1 orientation pin: increasing gz points outward on the
+    /// positive-normal faces, inward on the negative ones.
+    #[test]
+    fn gz_orientation_per_face() {
+        for face in [Face::Front, Face::Top, Face::Right] {
+            assert!(FaceGrid::new(&face, 256.0).gz_points_outward(), "{face:?}");
+        }
+        for face in [Face::Back, Face::Bottom, Face::Left] {
+            assert!(!FaceGrid::new(&face, 256.0).gz_points_outward(), "{face:?}");
+        }
+    }
+
+    /// Build a chunk around hand-chosen face-remapped lattice ranges, with
+    /// center/length consistent with the FaceGrid mapping (the guard-test
+    /// identity: center = position of the range midpoints).
+    fn chunk_at(
+        face: &Face,
+        scale: f32,
+        x: DimensionRange,
+        y: DimensionRange,
+        z: DimensionRange,
+    ) -> Chunk {
+        let grid = FaceGrid::new(face, scale);
+        let mid = |r: &DimensionRange| (r.0 + r.1) as f64 / 2.0;
+        let center = grid.position(mid(&x), mid(&y), mid(&z));
+        let length = (x.1 - x.0) as f32;
+        Chunk {
+            parent: None,
+            planet: Entity::PLACEHOLDER,
+            center: center.as_vec3(),
+            face: face.clone(),
+            length,
+            scale,
+            blocks: None,
+            range: NodeRange::from_ranges(x, y, z),
+        }
+    }
+
+    /// Without noise (`amp = 0`) the fill is the perfect sphere: solid iff
+    /// `|p| < scale`, one transition per column, `Grass` on the outermost
+    /// solid block, `Stone` below it.
+    #[test]
+    fn fill_matches_sphere_without_noise() {
+        let scale = 256.0f32;
+        let gen = TerrainGenerator::with_amplitude(scale, 1, 0.0);
+        let face = Face::Front;
+        let grid = FaceGrid::new(&face, scale);
+        let root = chunk_at(
+            &face,
+            scale,
+            DimensionRange(0, 512),
+            DimensionRange(0, 512),
+            DimensionRange(0, 512),
+        );
+        assert!(gen.chunk_intersects_surface(&root));
+        let blocks = fill_blocks(&gen, &grid, &root);
+        // Face-center column (gx = gy = 256 → x = y = 0): p = (0, 0, gz),
+        // gz = k·16 → solid iff gz < 256, i.e. k < 16.
+        for k in 0..CHUNK_SIZE {
+            assert_eq!(blocks.is_solid(16, 16, k), k < 16, "k = {k}");
+        }
+        assert_eq!(blocks.get(16, 16, 15), BlockType::Grass);
+        assert_eq!(blocks.get(16, 16, 14), BlockType::Stone);
+        assert_eq!(blocks.get(16, 16, 16), BlockType::Air);
+    }
+
+    /// Off-band chunks fill uniformly with zero noise evaluation: fully
+    /// inside → all Stone, fully outside → all Air.
+    #[test]
+    fn fill_is_uniform_off_band() {
+        let scale = 256.0f32;
+        let gen = TerrainGenerator::new(scale, 1);
+        let face = Face::Front;
+        let grid = FaceGrid::new(&face, scale);
+        let full = DimensionRange(0, 512);
+        // Deep inside: world |p| ≤ ~105 ≪ sea − band.
+        let inside = chunk_at(
+            &face,
+            scale,
+            DimensionRange(200, 232),
+            DimensionRange(200, 232),
+            DimensionRange(40, 72),
+        );
+        let blocks = fill_blocks(&gen, &grid, &inside);
+        assert!(!gen.chunk_intersects_surface(&inside));
+        for k in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for i in 0..CHUNK_SIZE {
+                    assert_eq!(blocks.get(i, j, k), BlockType::Stone);
+                }
+            }
+        }
+        // Far outside: world |p| ≥ ~441 ≫ sea + band.
+        let outside = chunk_at(
+            &face,
+            scale,
+            DimensionRange(200, 232),
+            DimensionRange(200, 232),
+            DimensionRange(440, 472),
+        );
+        let blocks = fill_blocks(&gen, &grid, &outside);
+        for k in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for i in 0..CHUNK_SIZE {
+                    assert_eq!(blocks.get(i, j, k), BlockType::Air);
+                }
+            }
+        }
+    }
+
+    /// Same signature → identical fill; different seed → a different fill.
+    #[test]
+    fn fill_is_deterministic_per_seed() {
+        let scale = 256.0f32;
+        let a = TerrainGenerator::new(scale, 7);
+        let b = TerrainGenerator::new(scale, 7);
+        let c = TerrainGenerator::new(scale, 8);
+        let face = Face::Front;
+        let grid = FaceGrid::new(&face, scale);
+        let root = chunk_at(
+            &face,
+            scale,
+            DimensionRange(0, 512),
+            DimensionRange(0, 512),
+            DimensionRange(0, 512),
+        );
+        let blocks_a = fill_blocks(&a, &grid, &root);
+        let blocks_b = fill_blocks(&b, &grid, &root);
+        let blocks_c = fill_blocks(&c, &grid, &root);
+        let mut differs_from_c = false;
+        for k in 0..CHUNK_SIZE {
+            for j in 0..CHUNK_SIZE {
+                for i in 0..CHUNK_SIZE {
+                    assert_eq!(blocks_a.get(i, j, k), blocks_b.get(i, j, k));
+                    differs_from_c |= blocks_a.get(i, j, k) != blocks_c.get(i, j, k);
+                }
+            }
+        }
+        assert!(differs_from_c, "different seed filled identically");
+    }
+
+    /// With noise, the face-center column has exactly one `Grass` block and
+    /// it is the outermost solid one.
+    #[test]
+    fn fill_puts_grass_on_the_outermost_solid() {
+        let scale = 256.0f32;
+        let gen = TerrainGenerator::new(scale, 3);
+        let face = Face::Front;
+        let grid = FaceGrid::new(&face, scale);
+        let root = chunk_at(
+            &face,
+            scale,
+            DimensionRange(0, 512),
+            DimensionRange(0, 512),
+            DimensionRange(0, 512),
+        );
+        let blocks = fill_blocks(&gen, &grid, &root);
+        // k ascends inward → outward on Front: deep Stone first, then the
+        // surface block. Invariants: exactly one Grass, and nothing solid
+        // outward of it.
+        let mut grasses = 0;
+        let mut grass_k = None;
+        for k in 0..CHUNK_SIZE {
+            match blocks.get(16, 16, k) {
+                BlockType::Air => {}
+                BlockType::Grass => {
+                    grasses += 1;
+                    grass_k = Some(k);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(grasses, 1, "expected exactly one surface block");
+        let k = grass_k.expect("no solid in the center column");
+        for kk in (k + 1)..CHUNK_SIZE {
+            assert!(!blocks.is_solid(16, 16, kk), "solid block above the Grass at k={kk}");
+        }
+    }
+
+    /// Cross-face agreement: the same world point, addressed through two
+    /// faces' lattices, resolves identically — the border-alignment
+    /// guarantee end to end.
+    #[test]
+    fn solidity_agrees_across_faces() {
+        let scale = 256.0f32;
+        let gen = TerrainGenerator::new(scale, 9);
+        let front = FaceGrid::new(&Face::Front, scale);
+        let top = FaceGrid::new(&Face::Top, scale);
+        // World (150, 100, 120):
+        //   Front lattice (gx = x+S, gy = y+S, gz = z)          → (406, 356, 120)
+        //   Top lattice   (world x = gx−S, y = gz, z = gy−S)     → (406, 376, 100)
+        let p_front = (406.0, 356.0, 120.0);
+        let p_top = (406.0, 376.0, 100.0);
+        assert_eq!(
+            front.position(p_front.0, p_front.1, p_front.2),
+            top.position(p_top.0, p_top.1, p_top.2)
+        );
+        assert_eq!(
+            gen.is_solid_at(&front, p_front.0, p_front.1, p_front.2),
+            gen.is_solid_at(&top, p_top.0, p_top.1, p_top.2)
+        );
+        assert_eq!(
+            gen.point_density(&front, p_front.0, p_front.1, p_front.2),
+            gen.point_density(&top, p_top.0, p_top.1, p_top.2)
+        );
     }
 }
