@@ -6,13 +6,15 @@ use crate::terrain::terrain_octree::NodeRange;
 #[derive(Component)]
 pub struct Chunk {
     pub(crate) parent: Option<Entity>,
-    pub(crate) center: Vec3,
+    pub(crate) center_on_cube: Vec3,
+    pub(crate) center_on_sphere: Vec3,
     pub(crate) face: Face,
     pub(crate) length: f32,
     pub(crate) scale: f32,
     pub(crate) planet_entity: Entity,
     pub(crate) blocks: Option<Blocks>,
     pub(crate) range: NodeRange,
+    pub(crate) level: u8,
 }
 
 pub struct Blocks {

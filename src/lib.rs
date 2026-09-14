@@ -11,6 +11,7 @@ use crate::terrain::terrain_octree::RemoveTerrainChildren;
 use crate::terrain::{Face, CHUNK_SIZE};
 use terrain::mesh::mesh_generator;
 use terrain::mesh::mesh_generator::MeshGenerator;
+use crate::terrain::mesh::cube::SurfacePatches;
 
 pub(crate) mod terrain;
 pub(crate) mod camera;
@@ -28,6 +29,7 @@ impl Plugin for SpaceCraftPlugin {
                 mesh_generator::restore_visibility,
             ).chain())
             .insert_resource(MeshGenerator::default())
+            .insert_resource(SurfacePatches::default())
             .add_event::<RemoveTerrainChildren>();
     }
 }

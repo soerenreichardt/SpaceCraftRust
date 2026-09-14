@@ -10,7 +10,7 @@ mod generate;
 
 pub const CHUNK_SIZE: usize = 16;
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) enum Face {
     Top,
     Bottom,
@@ -25,7 +25,7 @@ impl Face {
         match self {
             Face::Top => Vec3::Y,
             Face::Bottom => -Vec3::Y,
-            Face::Left => -Vec3::X,
+            Face::Left=> -Vec3::X,
             Face::Right => Vec3::X,
             Face::Front => Vec3::Z,
             Face::Back => -Vec3::Z,

@@ -9,6 +9,7 @@ type PlanetSide = TerrainOctree;
 #[derive(Component)]
 pub(crate) struct Planet {
     planet_sides: [PlanetSide; 6],
+    pub(crate) size: u8,
     pub(crate) terrain_generator: TerrainGenerator
 }
 
@@ -23,6 +24,7 @@ impl Planet {
                 PlanetSide::new(size, scale, Face::Top, planet_entity, commands),
                 PlanetSide::new(size, scale, Face::Bottom, planet_entity, commands),
             ],
+            size,
             terrain_generator: TerrainGenerator::new(scale, 0)
         }
     }

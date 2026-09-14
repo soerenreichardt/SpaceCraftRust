@@ -1,2 +1,3 @@
 pub(crate) mod mesh_generator;
-mod base_plane;
+pub(crate) mod base_plane;
+pub(crate) mod cube;

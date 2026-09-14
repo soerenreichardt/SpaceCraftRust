@@ -2,48 +2,53 @@ use crate::terrain::chunk::Chunk;
 use crate::terrain::{Face, CHUNK_SIZE};
 use bevy::math::DVec3;
 use bevy::prelude::*;
+use crate::terrain::mesh::cube::SurfacePatch;
 
 pub struct CurvedBasePlane {
     pub(crate) vertices: Vec<[f32; 3]>,
-    colors: Vec<[f32; 4]>,
+}
+
+#[inline]
+pub fn project_to_cube_surface(position: Vec3, face: Face, scale: f32) -> Vec3 {
+    match face {
+        Face::Top => Vec3::new(position.x, scale, position.z),
+        Face::Bottom => Vec3::new(position.x, -scale, position.z),
+        Face::Left => Vec3::new(-scale, position.y, position.z),
+        Face::Right => Vec3::new(scale, position.y, position.z),
+        Face::Front => Vec3::new(position.x, position.y, scale),
+        Face::Back => Vec3::new(position.x, position.y, -scale),
+    }
+}
+
+#[inline]
+pub fn project_to_sphere(center_on_cube: Vec3, face: Face, scale: f32) -> Vec3 {
+    let center_on_cube_surface = project_to_cube_surface(center_on_cube, face, scale);
+    center_on_cube_surface.normalize() * ((center_on_cube - center_on_cube_surface).length() + scale)
 }
 
 impl CurvedBasePlane {
-    pub fn compute_for_chunk(Chunk { center, face, length, scale, .. }: &Chunk) -> Self {
-        let step_size = *length as f64 / CHUNK_SIZE as f64;
-        let offset = *length as f64 / 2.0;
-        let (axis_a, axis_b) = face.perpendicular_vectors();
-        let axis_a = DVec3::from(axis_a);
-        let axis_b = DVec3::from(axis_b);
-        let (offset_a, offset_b) = (axis_a * offset, axis_b * offset);
+    pub fn compute_for_chunk(Chunk { center_on_cube, face, scale, .. }: &Chunk, surface_patch: &SurfacePatch) -> Self {
+        let center_on_cube_surface = project_to_cube_surface(*center_on_cube, *face, *scale);
+        let length = (center_on_cube - center_on_cube_surface).length() + scale;
 
         let mut vertices: Vec<[f32; 3]> = Vec::with_capacity((CHUNK_SIZE + 1) * (CHUNK_SIZE + 1));
-        let mut colors: Vec<[f32; 4]> = Vec::with_capacity((CHUNK_SIZE + 1) * (CHUNK_SIZE + 1));
-        let plane_center = DVec3::from(*center) - DVec3::from(center.normalize()) * offset;
+        let center_on_cube_surface = DVec3::from(center_on_cube_surface);
 
-        let channel = color_channel(face);
         for y in 0..CHUNK_SIZE + 1 {
             for x in 0..CHUNK_SIZE + 1 {
-                let vertex = axis_a * (x as f64 * step_size) + axis_b * (y as f64 * step_size) - offset_a - offset_b + plane_center;
-                let vertex = vertex.normalize() * *scale as f64;
-                let vertex = Vec3::new(vertex.x as f32, vertex.y as f32, vertex.z as f32);
-                let t = if x == 0 && y == 0 { 0.0 } else { 1.0 };
-                let mut color = [0.0, 0.0, 0.0, 1.0];
-                color[channel] = t;
-
-                vertices.push(vertex.into());
-                colors.push(color);
+                let vertex_on_cube_surface = surface_patch.get_vertex(x, y) + center_on_cube_surface;
+                let vertex_on_sphere = vertex_on_cube_surface.normalize().as_vec3() * length;
+                vertices.push(vertex_on_sphere.into());
             }
         }
 
         Self {
-            vertices,
-            colors,
+            vertices
         }
     }
 
-    pub fn data(self) -> (Vec<[f32; 3]>, Vec<[f32; 4]>) {
-        (self.vertices, self.colors)
+    pub fn vertices(self) -> Vec<[f32; 3]> {
+        self.vertices
     }
 
     #[inline]
