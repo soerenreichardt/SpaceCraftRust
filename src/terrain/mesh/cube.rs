@@ -30,27 +30,26 @@ impl Default for SurfacePatches {
 }
 
 impl SurfacePatches {
-    pub fn get_patch(&self, level: u8, planet_size: u8, face: Face) -> &SurfacePatch {
-        let index = planet_size - level;
-        &self.patches.get(&face).unwrap()[index as usize]
+    pub fn get_patch(&self, level: u8, face: Face) -> &SurfacePatch {
+        &self.patches.get(&face).unwrap()[level as usize]
     }
 }
 
 impl SurfacePatch {
     pub fn generate(level: u8, face: Face) -> Self {
-        let chunk_length = (2usize.pow(level as u32) * CHUNK_SIZE) as f64;
-        let step_size = chunk_length / CHUNK_SIZE as f64;
-        let offset_length = chunk_length / 2.0;
+        let chunk_span = 2.0f64.powi(-(level as i32));
+        let step_size = chunk_span * 2.0 / CHUNK_SIZE as f64;
 
         let (axis_a, axis_b) = face.perpendicular_vectors();
         let axis_a = DVec3::from(axis_a);
         let axis_b = DVec3::from(axis_b);
-        let (offset_a, offset_b) = (axis_a * offset_length, axis_b * offset_length);
 
         let mut vertices: Vec<DVec3> = Vec::with_capacity((CHUNK_SIZE + 1) * (CHUNK_SIZE + 1));
         for y in 0..CHUNK_SIZE + 1 {
             for x in 0..CHUNK_SIZE + 1 {
-                let vertex = axis_a * (x as f64 * step_size) + axis_b * (y as f64 * step_size) - offset_a - offset_b;
+                let position_a = (x as f64 * step_size) - chunk_span;
+                let position_b = (y as f64 * step_size) - chunk_span;
+                let vertex = axis_a * position_a + axis_b * position_b;
                 vertices.push(vertex);
             }
         }
@@ -58,10 +57,6 @@ impl SurfacePatch {
         Self {
             vertices: vertices.try_into().unwrap(),
         }
-    }
-
-    pub fn vertices(&self) -> &[DVec3] {
-        &self.vertices
     }
 
     pub fn get_vertex(&self, x: usize, y: usize) -> &DVec3 {

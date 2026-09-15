@@ -25,7 +25,7 @@ pub fn generate_chunk_meshes(
         let Ok(planet) = planets.get(chunk.planet_entity) else {
             continue;
         };
-        let surface_patch = surface_patches.get_patch(chunk.level, planet.size, chunk.face);
+        let surface_patch = surface_patches.get_patch(chunk.level, chunk.face);
         let terrain_generator = &planet.terrain_generator;
         
         let render_bundle = mesh_generator.compute_mesh(&mut chunk, surface_patch, terrain_generator, &mut meshes, &mut materials);

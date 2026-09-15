@@ -21,24 +21,40 @@ pub fn project_to_cube_surface(position: Vec3, face: Face, scale: f32) -> Vec3 {
 }
 
 #[inline]
+pub fn expand_to_unit_sphere(position_on_unit_cube: DVec3) -> DVec3 {
+    let x = position_on_unit_cube.x;
+    let y = position_on_unit_cube.y;
+    let z = position_on_unit_cube.z;
+    let (x2, y2, z2) = (x * x, y * y, z * z);
+
+    DVec3::new(
+        x * (1.0 - y2 / 2.0 - z2 / 2.0 + y2 * z2 / 3.0).sqrt(),
+        y * (1.0 - z2 / 2.0 - x2 / 2.0 + z2 * x2 / 3.0).sqrt(),
+        z * (1.0 - x2 / 2.0 - y2 / 2.0 + x2 * y2 / 3.0).sqrt(),
+    )
+}
+
+#[inline]
 pub fn project_to_sphere(center_on_cube: Vec3, face: Face, scale: f32) -> Vec3 {
     let center_on_cube_surface = project_to_cube_surface(center_on_cube, face, scale);
-    center_on_cube_surface.normalize() * ((center_on_cube - center_on_cube_surface).length() + scale)
+    let on_unit_cube = DVec3::from(center_on_cube_surface) / scale as f64;
+    let radius = (center_on_cube - center_on_cube_surface).length() + scale;
+    (expand_to_unit_sphere(on_unit_cube) * radius as f64).as_vec3()
 }
 
 impl CurvedBasePlane {
     pub fn compute_for_chunk(Chunk { center_on_cube, face, scale, .. }: &Chunk, surface_patch: &SurfacePatch) -> Self {
-        let center_on_cube_surface = project_to_cube_surface(*center_on_cube, *face, *scale);
-        let length = (center_on_cube - center_on_cube_surface).length() + scale;
+        let center_on_cube_surface = DVec3::from(project_to_cube_surface(*center_on_cube, *face, *scale));
+        let center_on_unit_cube = center_on_cube_surface / *scale as f64;
+        let radius = (DVec3::from(*center_on_cube) - center_on_cube_surface).length() + *scale as f64;
 
         let mut vertices: Vec<[f32; 3]> = Vec::with_capacity((CHUNK_SIZE + 1) * (CHUNK_SIZE + 1));
-        let center_on_cube_surface = DVec3::from(center_on_cube_surface);
 
         for y in 0..CHUNK_SIZE + 1 {
             for x in 0..CHUNK_SIZE + 1 {
-                let vertex_on_cube_surface = surface_patch.get_vertex(x, y) + center_on_cube_surface;
-                let vertex_on_sphere = vertex_on_cube_surface.normalize().as_vec3() * length;
-                vertices.push(vertex_on_sphere.into());
+                let vertex_on_unit_cube = *surface_patch.get_vertex(x, y) + center_on_unit_cube;
+                let vertex_on_sphere = expand_to_unit_sphere(vertex_on_unit_cube) * radius;
+                vertices.push(vertex_on_sphere.as_vec3().into());
             }
         }
 
