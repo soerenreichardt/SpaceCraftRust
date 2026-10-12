@@ -36,7 +36,7 @@ impl Plugin for SpaceCraftPlugin {
 
 impl SpaceCraftPlugin {
     fn setup(mut commands: Commands) {
-        let radius = 4;
+        let radius = 7;
         let scale = 2.0f32.powf(radius as f32 - 1.0) * CHUNK_SIZE as f32;
         commands.spawn((
             Camera3d { ..default() },

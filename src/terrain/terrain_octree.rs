@@ -53,7 +53,7 @@ impl Splittable for TerrainOctreeNode {
                 level: level
             },
             Transform::from_translation(Vec3::ZERO),
-            Visibility::default(),
+            Visibility::Visible,
         )).id();
 
         commands.entity(self.entity).add_child(entity);
@@ -93,12 +93,6 @@ impl Octree<TerrainOctreeNode> {
             if distance_to_camera <= threshold {
                 if !self.split(commands) {
                     return;
-                }
-                let children = self.children.as_mut().unwrap();
-                let mut entity_commands = commands.entity(self.node.entity);
-                for child in children.iter_mut() {
-                    let node = &mut child.node;
-                    entity_commands.add_child(node.entity);
                 }
             }
         }

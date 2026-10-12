@@ -10,6 +10,7 @@ use bevy::prelude::*;
 use bevy::render::mesh::{Indices, PrimitiveTopology};
 use bevy::render::render_asset::RenderAssetUsages;
 use crate::terrain::mesh::cube::{SurfacePatch, SurfacePatches};
+use crate::terrain::mesh::marching_cubes;
 
 pub fn generate_chunk_meshes(
     mut commands: Commands,
@@ -81,16 +82,18 @@ impl MeshGenerator {
     ) -> impl Bundle {
         let base_plane = CurvedBasePlane::compute_for_chunk(chunk, surface_patch);
 
-        chunk.blocks = Some(Self::fill_blocks(&base_plane, terrain_generator, chunk));
-        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
-        let vertices = base_plane.vertices();
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+        // chunk.blocks = Some(Self::fill_blocks(&base_plane, terrain_generator, chunk));
+        // let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::all());
+        // let vertices = base_plane.vertices();
+        // mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vertices);
+        //
+        // let (axis_a, axis_b) = chunk.face.perpendicular_vectors();
+        // let flip = axis_a.cross(axis_b).dot(chunk.face.direction_vector()) > 0.0;
+        // let indices = if flip { &self.flipped_indices } else { &self.indices };
+        // mesh.insert_indices(Indices::U32(indices.clone()));
+        // mesh.compute_normals();
 
-        let (axis_a, axis_b) = chunk.face.perpendicular_vectors();
-        let flip = axis_a.cross(axis_b).dot(chunk.face.direction_vector()) > 0.0;
-        let indices = if flip { &self.flipped_indices } else { &self.indices };
-        mesh.insert_indices(Indices::U32(indices.clone()));
-        mesh.compute_normals();
+        let mesh = marching_cubes::generate_mesh(&base_plane, terrain_generator, chunk);
 
         (
             Mesh3d(meshes.add(mesh)),
@@ -98,7 +101,6 @@ impl MeshGenerator {
                 base_color: Color::WHITE,
                 ..default()
             })),
-            Visibility::Visible,
             Wireframe,
         )
     }

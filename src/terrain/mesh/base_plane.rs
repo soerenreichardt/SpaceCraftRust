@@ -38,15 +38,16 @@ pub fn expand_to_unit_sphere(position_on_unit_cube: DVec3) -> DVec3 {
 pub fn project_to_sphere(center_on_cube: Vec3, face: Face, scale: f32) -> Vec3 {
     let center_on_cube_surface = project_to_cube_surface(center_on_cube, face, scale);
     let on_unit_cube = DVec3::from(center_on_cube_surface) / scale as f64;
-    let radius = (center_on_cube - center_on_cube_surface).length() + scale;
+    let radius = (center_on_cube - center_on_cube_surface).dot(face.direction_vector()) + scale;
     (expand_to_unit_sphere(on_unit_cube) * radius as f64).as_vec3()
 }
 
 impl CurvedBasePlane {
-    pub fn compute_for_chunk(Chunk { center_on_cube, face, scale, .. }: &Chunk, surface_patch: &SurfacePatch) -> Self {
+    pub fn compute_for_chunk(Chunk { center_on_cube, face, scale, length, .. }: &Chunk, surface_patch: &SurfacePatch) -> Self {
         let center_on_cube_surface = DVec3::from(project_to_cube_surface(*center_on_cube, *face, *scale));
         let center_on_unit_cube = center_on_cube_surface / *scale as f64;
-        let radius = (DVec3::from(*center_on_cube) - center_on_cube_surface).length() + *scale as f64;
+        let radius = (DVec3::from(*center_on_cube) - center_on_cube_surface).dot(face.direction_vector().into()) + *scale as f64;
+        let radius = radius - *length as f64 / 2.0;
 
         let mut vertices: Vec<[f32; 3]> = Vec::with_capacity((CHUNK_SIZE + 1) * (CHUNK_SIZE + 1));
 
@@ -58,9 +59,7 @@ impl CurvedBasePlane {
             }
         }
 
-        Self {
-            vertices
-        }
+        Self { vertices }
     }
 
     pub fn vertices(self) -> Vec<[f32; 3]> {
