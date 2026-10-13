@@ -1,5 +1,5 @@
-use bevy::input::{ButtonInput};
-use bevy::input::mouse::{MouseButtonInput, MouseMotion};
+use bevy::input::mouse::MouseMotion;
+use bevy::input::ButtonInput;
 use bevy::math::{EulerRot, Quat, Vec3};
 use bevy::prelude::{Component, EventReader, KeyCode, MouseButton, Mut, Query, Res, Transform, Window, With};
 use bevy::window::{CursorGrabMode, PrimaryWindow};
@@ -14,7 +14,7 @@ pub(crate) fn update_camera_position(
     mut motion_events: EventReader<MouseMotion>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,
 ) {
-    let (mut transform, mut camera) = query.single_mut();
+    let (mut transform, mut camera) = query.single_mut().unwrap();
     if handle_mouse_click(mouse_buttons, &mut windows) {
         handle_rotation(&mut motion_events, &mut transform);
     } else {
@@ -39,18 +39,18 @@ fn handle_rotation(motion_events: &mut EventReader<MouseMotion>, transform: &mut
 }
 
 fn handle_mouse_click(mouse_buttons: Res<ButtonInput<MouseButton>>, windows: &mut Query<&mut Window, With<PrimaryWindow>>) -> bool {
-    let mut primary_window = windows.single_mut();
+    let mut primary_window = windows.single_mut().unwrap();
     if mouse_buttons.just_pressed(MouseButton::Right) {
-        primary_window.cursor.grab_mode = CursorGrabMode::Locked;
-        primary_window.cursor.visible = false;
+        primary_window.cursor_options.grab_mode = CursorGrabMode::Locked;
+        primary_window.cursor_options.visible = false;
         return true;
     }
     if mouse_buttons.pressed(MouseButton::Right) {
         return true;
     }
     if mouse_buttons.just_released(MouseButton::Right) {
-        primary_window.cursor.grab_mode = CursorGrabMode::None;
-        primary_window.cursor.visible = true;
+        primary_window.cursor_options.grab_mode = CursorGrabMode::None;
+        primary_window.cursor_options.visible = true;
     }
     false
 }
